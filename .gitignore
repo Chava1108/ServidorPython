@@ -1,0 +1,12 @@
+# Django standard ignores
+*.log
+*.pot
+*.pyc
+__pycache__/
+db.sqlite3
+media/
+
+# Entorno virtual (Ajusta el nombre si el tuyo es distinto)
+venv/
+env/
+.env
