@@ -56,7 +56,9 @@ urlpatterns = [
     path('archivos-proyecto/<int:proyecto_id>', views.listar_archivos_proyecto),
     path('leer-archivo', views.leer_archivo_fisico),
     path('compilar-proyecto', views.compilar_y_ejecutar_proyecto),
-    path('guardar-archivo', views.guardar_archivo_cambios) 
+    path('guardar-archivo', views.guardar_archivo_cambios),
+    path('api/login/', views.login_view, name='login'),
+    path('api/logout/', views.logout_view, name='logout'),
 ]
 
 # Configuración para servir imágenes en modo DEBUG

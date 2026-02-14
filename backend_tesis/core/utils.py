@@ -224,14 +224,14 @@ def propagar_cambios_a_hijos(id_clase_padre):
         # Esto automáticamente leerá los nuevos atributos del padre de la BD
         actualizar_archivo_java_desde_bd(id_hijo)
 
-def guardar_archivo_fisico(usuario_id, proyecto_id, nombre_clase, codigo_texto):
+def guardar_archivo_fisico(usuario_id, proyecto_id, nombre_clase, codigo_texto, lenguaje):
     ruta_relativa_carpeta = os.path.join('codigos_fuente', f'usuario_{usuario_id}', f'proyecto_{proyecto_id}')
     ruta_absoluta_carpeta = os.path.join(settings.BASE_DIR, ruta_relativa_carpeta)
     
     if not os.path.exists(ruta_absoluta_carpeta):
         os.makedirs(ruta_absoluta_carpeta)
-    
-    nombre_archivo = f"{nombre_clase}.java"
+    extension = '.cpp' if lenguaje == 'cpp' else '.java'
+    nombre_archivo = f"{nombre_clase}{extension}"
     ruta_absoluta_archivo = os.path.join(ruta_absoluta_carpeta, nombre_archivo)
     
     with open(ruta_absoluta_archivo, 'w', encoding='utf-8') as archivo:
@@ -304,21 +304,28 @@ def actualizar_archivo_java_desde_bd(id_clase):
         print(f"Error regenerando archivo ID {id_clase}: {e}")
         return False
     
-def generar_codigo_main():
-    return """public class Main {
-    public static void main(String[] args) {
-        // Instancia tus clases aquí y prueba tus métodos
-        System.out.println("Hola Mundo desde el Main!");
-    }
-    }"""
+def generar_codigo_main(lenguaje):
+    codigo = ""
+    if lenguaje == 'cpp':
+        codigo = '#include <iostream>\nusing namespace std;\n\nint main() {\n    cout << "Hola Mundo C++" << endl;\n    return 0;\n}'
+    else:
+        codigo = """public class Main {
+            public static void main(String[] args) {
+                // Instancia tus clases aquí y prueba tus métodos
+                System.out.println("Hola Mundo desde el Main!");
+            }
+            }"""
+    return codigo
 
 def registrar_xapi(actor, verbo, objeto=""):
+    print(f"Entro a guardarLog actor: {actor}, verbo: {verbo}")
     try:
         LogActividad.objects.create(
-            usuario=str(actor), # Aseguramos que se guarde como texto
+            usuario=int(actor), # Aseguramos que se guarde como texto
             accion=verbo,
             detalle=objeto
         )
+        print("DEBUG: Log guardado con éxito (Método ForeignKey)")
     except Exception as e:
         print(f"Error guardando log xAPI: {e}")
 

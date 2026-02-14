@@ -9,7 +9,7 @@ public class Main {
             int edad = entrada.nextInt();
             int edad2 = entrada.nextInt();
 
-            System.out.println("Hola Mundo la  edad sumada es: "+ (edad+ edad2));
+            System.out.println("Hola Mundo la  edad sumada es : "+ (edad+ edad2));
             System.exit(0);
         }
     }

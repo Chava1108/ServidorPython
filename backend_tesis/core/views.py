@@ -12,7 +12,11 @@ from .utils import actualizar_archivo_java_desde_bd, analizar_codigo_java, gener
 from .models import LogActividad # Para los logs de tesis
 import re
 from rest_framework.exceptions import ValidationError
-
+from django.contrib.auth import authenticate
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.authtoken.models import Token
+from .compile import compilar_cpp, compilar_java
 
 # --- UTILIDAD: SUBIDA DE ARCHIVOS ---
 @api_view(['POST'])
@@ -42,6 +46,11 @@ def gestionar_atributos(request):
         if serializer.is_valid():
             nuevo_atributo = serializer.save()
             id_clase = nuevo_atributo.id_clase.pk
+            registrar_xapi(
+                id_clase.id_usr.id, 
+                "agregó_atributo", 
+                f"Atributo '{nuevo_atributo.nombre}' ({nuevo_atributo.tipo}) a la clase '{nuevo_atributo.id_clase.nombre}'"
+            )
             actualizar_archivo_java_desde_bd(id_clase)
             return Response(serializer.data, status=201)
         return Response(serializer.errors, status=400)
@@ -74,8 +83,8 @@ def gestionar_atributo_individual(request, id):
         if serializer.is_valid():
             atributo_actualizado = serializer.save()
             registrar_xapi(
-                atributo_actualizado.id_clase.id_proyecto.id_usr.username, 
-                "agregó_atributo", 
+                atributo_actualizado.id_clase.id_proyecto.id_usr.id, 
+                "modificó_atributo", 
                 f"Atributo '{atributo_actualizado.nombre}' ({atributo_actualizado.tipo}) a la clase '{atributo_actualizado.id_clase.nombre}'"
             )
             actualizar_archivo_java_desde_bd(atributo_actualizado.id_clase.pk)
@@ -86,7 +95,7 @@ def gestionar_atributo_individual(request, id):
         id_clase_padre = atributo.id_clase.pk
         clase = Clase.objects.get(pk=id_clase_padre)
         registrar_xapi(
-                clase.id_usr.username, 
+                clase.id_usr.id, 
                 "eliminó_atributo", 
                 f"Atributo '{atributo.nombre}' ({atributo.tipo}) a la clase '{atributo.id_clase.nombre}'"
         )
@@ -114,6 +123,11 @@ def gestionar_funciones(request):
         serializer = FuncionesSerializer(data=data)
         if serializer.is_valid():
             nueva_funcion = serializer.save()
+            registrar_xapi(
+                nueva_funcion.id_usr.id, 
+                "agregó_función", 
+                f"Funcion '{nueva_funcion.nombre}' ({nueva_funcion.tipo}) a la clase '{nueva_funcion.id_clase.nombre}'"
+            )
             actualizar_archivo_java_desde_bd(nueva_funcion.id_clase.pk)
             return Response(serializer.data, status=201)
         return Response(serializer.errors, status=400)
@@ -143,16 +157,25 @@ def gestionar_funcion_individual(request, id):
         
         if serializer.is_valid():
             funcion_actualizada = serializer.save()
-            
-            # 5. IMPORTANTE: Regenerar el archivo Java
+            registrar_xapi(
+                funcion_actualizada.id_usr.id, 
+                "modificó_función", 
+                f"Funcion '{funcion_actualizada.nombre}' ({funcion_actualizada.tipo}) a la clase '{funcion_actualizada.id_clase.nombre}'"
+            )
             actualizar_archivo_java_desde_bd(funcion_actualizada.id_clase.pk)
             
             return Response(serializer.data)
             
         return Response(serializer.errors, status=400)
     elif request.method == 'DELETE':
-        # Replica la lógica de Node.js: borrar funciones de una CLASE
+        funcion_existente = Funciones.objects.get(pk=id)
+        registrar_xapi(
+            funcion_existente.id_usr.id, 
+            "eliminó_función", 
+            f"Funcion '{funcion_existente.nombre}' ({funcion_existente.tipo}) a la clase '{funcion_existente.id_clase.nombre}'"
+        )
         Funciones.objects.filter(id_clase=id).delete()
+        
         actualizar_archivo_java_desde_bd(id)
         return Response({"msg": "Deleted"})
 
@@ -176,7 +199,13 @@ def gestionar_herencia_hijo(request, id):
 def crear_herencia(request):
     serializer = HerenciaSerializer(data=request.data)
     if serializer.is_valid():
-        serializer.save()
+        herencia = serializer.save()
+        id_del_usuario = herencia.clase_hija.id_proyecto.id_usr.id
+        registrar_xapi(
+            id_del_usuario, 
+            "creó_herencia", 
+            f"Hija: {herencia.clase_hija.nombre} extiende de Padre: {herencia.clase_padre.nombre}"
+        )
         return Response(serializer.data, status=201)
     return Response(serializer.errors, status=400)
 
@@ -203,7 +232,8 @@ def get_clase_id(request):
 def crear_clase(request):
     datos = request.data
     try:
-        # 1. Crear la Clase en BD (Sin código aún)
+        
+        print(datos) 
         proyecto_instancia = Proyecto.objects.get(pk=datos['id_proyecto'])
         nueva_clase = Clase.objects.create(
             nombre=datos['nombre'],
@@ -216,10 +246,15 @@ def crear_clase(request):
         ruta = guardar_archivo_fisico(datos['id_usuario'], datos['id_proyecto'], nueva_clase.nombre, codigo)
         nueva_clase.path_archivo = ruta
         nueva_clase.save()
-
+        registrar_xapi(
+            datos['id_usuario'], 
+            "creó_clase", 
+            f"Clase {nueva_clase.nombre}"
+        )
         return Response({"msg": "Clase creada", "id": nueva_clase.pk, "path": ruta})
         
     except Exception as e:
+        print(str(e))
         return Response({"error": str(e)}, status=500)
 
 # --- USUARIOS Y PROYECTOS ---
@@ -246,6 +281,7 @@ def get_proyectos_usuario(request, id):
 def get_proyecto_individual(request):
     n1 = request.query_params.get('n1') # id_usr
     n2 = request.query_params.get('n2') # nombre
+    print(f"n1 = {n1} n2  = {n2}")
     proyectos = Proyecto.objects.filter(id_usr=n1, nombre=n2)
     serializer = ProyectoSerializer(proyectos, many=True)
     return Response(serializer.data)
@@ -255,33 +291,35 @@ def crear_proyecto(request):
     serializer = ProyectoSerializer(data=request.data)
     if serializer.is_valid():
         proyecto_nuevo=serializer.save()
+        registrar_xapi(
+            proyecto_nuevo.id_usr.pk, 
+            "creó_proyecto", 
+            f"Proyecto '{proyecto_nuevo.nombre}'"
+        )
         try:
             # 1. Generar código
-            codigo_main = generar_codigo_main()
+            codigo_main = generar_codigo_main(proyecto_nuevo.lenguaje)
             
             # 2. Guardar archivo físico (Main.java)
             ruta_main = guardar_archivo_fisico(
                 usuario_id=proyecto_nuevo.id_usr.pk, # O el campo que uses para usuario
                 proyecto_id=proyecto_nuevo.pk,
                 nombre_clase="Main",
-                codigo_texto=codigo_main
+                codigo_texto=codigo_main,
+                lenguaje=proyecto_nuevo.lenguaje
             )
             
-            # 3. Guardar registro en la BD de Clases
-            # Esto es vital para que aparezca en el diagrama y en la lista de archivos
+
             Clase.objects.create(
                 nombre="Main",
                 id_proyecto=proyecto_nuevo, # Pasamos la instancia del proyecto recién creado
                 path_archivo=ruta_main,
-                codigo_fuente=codigo_main,
-                # coordenadas_x = 100, (Opcional: dales una posición fija inicial)
-                # coordenadas_y = 100
+
             )
             
         except Exception as e:
             print(f"Error creando Main automático: {e}")
-            # No retornamos error al front para no bloquear la creación del proyecto, 
-            # pero lo dejamos en consola.
+
 
         return Response(serializer.data, status=201)
     return Response(serializer.errors, status=400)
@@ -481,14 +519,11 @@ def obtener_codigo_clase(request, id):
 @api_view(['GET'])
 def listar_archivos_proyecto(request, proyecto_id):
     """
-    Lista todos los archivos .java físicos que existen en la carpeta del proyecto.
+    Lista los archivos .java O .cpp físicos en la carpeta, según el lenguaje del proyecto.
     """
     try:
-        # 1. Recuperamos el proyecto para saber el ID del usuario
         proyecto = Proyecto.objects.get(pk=proyecto_id)
         
-        # 2. Construimos la ruta: codigos_fuente/usuario_X/proyecto_Y
-        # Ajusta 'id_usr' si en tu modelo es un objeto o un ID directo
         id_usuario = proyecto.id_usr.id if hasattr(proyecto.id_usr, 'id') else proyecto.id_usr
         
         ruta_relativa = os.path.join('codigos_fuente', f'usuario_{id_usuario}', f'proyecto_{proyecto.id}')
@@ -496,14 +531,19 @@ def listar_archivos_proyecto(request, proyecto_id):
 
         archivos = []
         
+        es_cpp = proyecto.lenguaje == 'cpp'
+        
+        extension_buscada = ".cpp" if es_cpp else ".java"
+        archivo_main_esperado = "Main.cpp" if es_cpp else "Main.java"
+
         if os.path.exists(ruta_absoluta):
-            # 3. Listamos lo que hay en la carpeta
             for nombre_archivo in os.listdir(ruta_absoluta):
-                if nombre_archivo.endswith(".java"):
+                if nombre_archivo.endswith(extension_buscada):
                     archivos.append({
                         "nombre": nombre_archivo,
                         "ruta_relativa": os.path.join(ruta_relativa, nombre_archivo),
-                        "es_main": nombre_archivo == "Main.java" # Flag útil para el front
+                        "es_main": nombre_archivo == archivo_main_esperado, 
+                        "lenguaje": proyecto.lenguaje 
                     })
         
         return Response(archivos)
@@ -526,89 +566,59 @@ def leer_archivo_fisico(request):
 
 @api_view(['POST'])
 def compilar_y_ejecutar_proyecto(request):
-    """
-    Recibe: { "id_proyecto": 1 }
-    1. Compila TODOS los archivos .java en la carpeta del proyecto.
-    2. Ejecuta la clase 'Main'.
-    """
     id_proyecto = request.data.get('id_proyecto')
-    entradas_usuario = request.data.get('entradas')
+    entradas_usuario = request.data.get('entradas', "")
+    
+    if entradas_usuario and not entradas_usuario.endswith('\n'):
+        entradas_usuario += '\n'
+
     try:
-        # 1. Obtener la ruta de la carpeta del proyecto
+        # 1. Obtener datos
         proyecto = Proyecto.objects.get(pk=id_proyecto)
-        
-        # Ajusta esto si tu id_usr es un objeto o un entero, igual que hicimos antes
         uid = proyecto.id_usr.id if hasattr(proyecto.id_usr, 'id') else proyecto.id_usr
         
         ruta_relativa = os.path.join('codigos_fuente', f'usuario_{uid}', f'proyecto_{proyecto.id}')
         ruta_absoluta = os.path.join(settings.BASE_DIR, ruta_relativa)
 
         if not os.path.exists(ruta_absoluta):
-            return Response({"exito": False, "mensaje": "Error: La carpeta del proyecto no existe."}, status=404)
+            return Response({"exito": False, "mensaje": "Error: Carpeta no encontrada."}, status=404)
 
-        # 2. Identificar todos los archivos .java para compilarlos juntos
-        # Esto es vital para que Main.java reconozca a Perro.java, etc.
-        archivos_java = [f for f in os.listdir(ruta_absoluta) if f.endswith('.java')]
+        # 2. DECISIÓN BASADA EN BD (Mucho más robusto)
+        resultado = {}
         
-        if not archivos_java:
-            return Response({"exito": False, "mensaje": "No hay archivos .java para compilar."})
+        # Usamos el campo nuevo 'lenguaje'
+        if proyecto.lenguaje == 'cpp':
+            # Solo buscamos archivos cpp
+            archivos_cpp = [f for f in os.listdir(ruta_absoluta) if f.endswith('.cpp')]
+            if not archivos_cpp:
+                return Response({"exito": False, "mensaje": "El proyecto es C++ pero no hay archivos .cpp"})
+                
+            resultado = compilar_cpp(ruta_absoluta, archivos_cpp, entradas_usuario)
 
-        # --- FASE DE COMPILACIÓN ---
-        # Comando: javac -encoding utf8 Main.java Perro.java Gato.java ...
-        comando_compile = ['javac', '-encoding', 'utf-8'] + archivos_java
-
-        if entradas_usuario:
-            if not entradas_usuario.endswith('\n'):
-                entradas_usuario += '\n'
-        
-        proceso_compile = subprocess.run(
-            comando_compile,
-            cwd=ruta_absoluta,     # Ejecutar DENTRO de la carpeta
-            capture_output=True,   # Capturar lo que salga en consola
-            text=True,             # Que lo devuelva como texto, no bytes
-            timeout=10
-        )
-
-        # Si el código de retorno no es 0, hubo error de sintaxis
-        if proceso_compile.returncode != 0:
-            return Response({
-                "exito": False, 
-                "mensaje": "❌ Error de Compilación:\n" + proceso_compile.stderr
-            })
-
-        # --- FASE DE EJECUCIÓN ---
-        # Verificamos si existe Main.class (o Main.java en la lista)
-        if "Main.java" not in archivos_java:
-             return Response({"exito": False, "mensaje": "⚠️ Compilación exitosa, pero no se encontró 'Main.java' para ejecutar."})
-
-        try:
-            # Comando: java -cp . Main  (-cp . es ClassPath actual)
-            proceso_run = subprocess.run(
-                ['java', '-cp', '.', 'Main'], 
-                cwd=ruta_absoluta,
-                capture_output=True, 
-                input=entradas_usuario,
-                text=True,
-                timeout=10
-            )
+        elif proyecto.lenguaje == 'java':
+            # Solo buscamos archivos java
+            archivos_java = [f for f in os.listdir(ruta_absoluta) if f.endswith('.java')]
+            if not archivos_java:
+                return Response({"exito": False, "mensaje": "El proyecto es Java pero no hay archivos .java"})
+                
+            resultado = compilar_java(ruta_absoluta, archivos_java, entradas_usuario)
             
-            # Unimos stdout (salida normal) y stderr (errores en ejecución)
-            salida = proceso_run.stdout
-            if proceso_run.stderr:
-                salida += "\n⚠️ Errores durante la ejecución:\n" + proceso_run.stderr
+        else:
+            return Response({"exito": False, "mensaje": f"Lenguaje '{proyecto.lenguaje}' no soportado aún."})
 
-            return Response({"exito": True, "mensaje": salida})
+        # 3. LOGS (Igual que antes)
+        if resultado['exito']:
+            registrar_xapi(uid, f"compiló_{proyecto.lenguaje}", f"Éxito en proyecto {proyecto.id}")
+        else:
+            tipo = resultado.get('tipo_error', 'general')
+            registrar_xapi(uid, f"error_{tipo}_{proyecto.lenguaje}", f"Fallo en proyecto {proyecto.id}")
 
-        except subprocess.TimeoutExpired:
-            return Response({
-                "exito": False, 
-                "mensaje": "⏱️ Error: El programa tardó demasiado en responder (Timeout 5s).\nPosible bucle infinito o espera de input no soportada."
-            })
+        return Response(resultado)
 
     except Proyecto.DoesNotExist:
         return Response({"error": "Proyecto no encontrado"}, status=404)
     except Exception as e:
-        return Response({"error": "Error interno del servidor: " + str(e)}, status=500)
+        return Response({"error": "Error interno: " + str(e)}, status=500)
 
 @api_view(['POST'])
 def guardar_archivo_cambios(request):
@@ -618,13 +628,18 @@ def guardar_archivo_cambios(request):
     """
     ruta_relativa = request.data.get('ruta_relativa')
     nuevo_codigo = request.data.get('codigo')
-
+    id_proyecto = request.data.get('id_proyecto')
     if not ruta_relativa or nuevo_codigo is None:
         return Response({"error": "Faltan datos"}, status=400)
-
+    
     try:
+        proyecto = Proyecto.objects.get(pk=id_proyecto)
         ruta_absoluta = os.path.join(settings.BASE_DIR, ruta_relativa)
-        
+        registrar_xapi(
+            proyecto.id_usr.id if hasattr(proyecto.id_usr, 'id') else proyecto.id_usr, 
+            "guardó_código", 
+            f"Archivo: {ruta_relativa} (Proyecto: {proyecto.nombre})"
+        )
         # Escribimos el archivo (modo 'w' sobrescribe todo)
         with open(ruta_absoluta, 'w', encoding='utf-8') as f:
             f.write(nuevo_codigo)
@@ -633,3 +648,64 @@ def guardar_archivo_cambios(request):
         
     except Exception as e:
         return Response({"error": str(e)}, status=500)
+    
+@api_view(['POST'])
+def login_view(request):
+    # 1. Obtener datos del JSON que envía Angular
+    username = request.data.get('username')
+    password = request.data.get('password')
+
+    # 2. Validar que vengan los datos
+    if not username or not password:
+        return Response(
+            {'error': 'Faltan credenciales'}, 
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    # 3. Autenticación Mágica de Django
+    # Esto revisa el hash de la contraseña de forma segura.
+    user = authenticate(request, username=username, password=password)
+
+    if user is not None:
+        if user.is_active:
+            # --- ZONA DE LOGS PARA TU TESIS ---
+            # Registramos que el alumno entró exitosamente
+            token, created = Token.objects.get_or_create(user=user)
+            registrar_xapi(user.id, "inició_sesión", "Acceso desde Login Web")
+            
+            # 4. Respuesta Exitosa
+            # Devolvemos solo lo necesario para el frontend
+            return Response({
+                'id': user.id,
+                'username': user.username,
+                'token': token.key,
+                'mensaje': 'Login exitoso'
+            }, status=status.HTTP_200_OK)
+        else:
+            return Response(
+                {'error': 'Usuario desactivado'}, 
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+    else:
+        # 5. Fallo de autenticación
+        # Registramos el intento fallido (Opcional, pero bueno para seguridad)
+        print(f"Intento fallido de login para: {username}")
+        return Response(
+            {'error': 'Credenciales incorrectas'}, 
+            status=status.HTTP_401_UNAUTHORIZED
+        )
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated]) # Solo usuarios logueados pueden llamar a esto
+def logout_view(request):
+    # Obtenemos la razón del logout (Manual o Inactividad)
+    motivo = request.data.get('motivo', 'manual')
+    
+    # 1. LOG PARA TU TESIS
+    verbo = "cerró_sesión_inactividad" if motivo == 'timeout' else "cerró_sesión_manual"
+    detalle = "El sistema cerró la sesión por 10 min sin actividad" if motivo == 'timeout' else "El usuario dio click en salir"
+    
+    registrar_xapi(request.user.id, verbo, detalle)
+
+    # 2. Respuesta
+    return Response({'mensaje': 'Sesión cerrada y registrada'}, status=200)

@@ -7,6 +7,7 @@
 # Feel free to rename the models, but don't rename db_table values or field names.
 from django.db import models
 from django.utils import timezone
+from django.contrib.auth.models import AbstractBaseUser, BaseUserManager
 
 class Getatributos(models.Model):
     id = models.IntegerField(primary_key=True) 
@@ -104,21 +105,79 @@ class Herencia(models.Model):
 class Proyecto(models.Model):
     nombre = models.CharField(max_length=60)
     id_usr = models.ForeignKey('Usuario', models.DO_NOTHING, db_column='id_usr')
-
+    OPCIONES_LENGUAJE = [
+            ('java', 'Java'),
+            ('cpp', 'C++ (G++)'),
+        ]
+    lenguaje = models.CharField(
+        max_length=10, 
+        choices=OPCIONES_LENGUAJE, 
+        default='java' 
+    )
     class Meta:
-        managed = False
+        managed = True
         db_table = 'proyecto'
 
+    
+class UsuarioManager(BaseUserManager):
+    def create_user(self, username, email, password=None):
+        if not username:
+            raise ValueError('El usuario debe tener un username')
+        user = self.model(
+            username=username,
+            email=self.normalize_email(email),
+        )
+        user.set_password(password) # Encripta la contraseña
+        user.save(using=self._db)
+        return user
 
-class Usuario(models.Model):
-    name = models.CharField(max_length=40)
-    email = models.CharField(max_length=30)
-    username = models.CharField(max_length=30)
-    password = models.CharField(max_length=100)
+    def create_superuser(self, username, email, password):
+        user = self.create_user(username, email, password)
+        user.is_admin = True
+        user.save(using=self._db)
+        return user
+
+
+class Usuario(AbstractBaseUser):
+    # --- TUS CAMPOS EXISTENTES (Déjalos tal cual) ---
+    name = models.CharField(max_length=255)
+    email = models.EmailField(max_length=255, unique=True)
+    username = models.CharField(max_length=100, unique=True)
+    
+    # El campo 'password' YA EXISTE en AbstractBaseUser, 
+    # así que puedes borrar tu definición de password si la tenías,
+    # o dejarla si quieres configurar max_length específico.
+    
+    # --- CAMPOS NUEVOS REQUERIDOS POR DJANGO ---
+    # Django necesita estos flags para saber si el usuario puede entrar
+    is_active = models.BooleanField(default=True)
+    is_admin = models.BooleanField(default=False)
+
+    objects = UsuarioManager()
+
+    # Configuración clave
+    USERNAME_FIELD = 'username' # Campo para loguearse
+    REQUIRED_FIELDS = ['email'] # Campos obligatorios al crear superuser
 
     class Meta:
-        managed = False
-        db_table = 'usuario'
+        # IMPORTANTE: Asegúrate que esto coincida con el nombre real de tu tabla
+        # para que no cree una nueva.
+        db_table = 'usuario' 
+        managed = True
+
+    def __str__(self):
+        return self.username
+
+    # Métodos requeridos para que funcione el Admin de Django
+    def has_perm(self, perm, obj=None):
+        return True
+
+    def has_module_perms(self, app_label):
+        return True
+
+    @property
+    def is_staff(self):
+        return self.is_admin
 
 
 class LogActividad(models.Model):
