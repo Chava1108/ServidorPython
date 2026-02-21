@@ -11,6 +11,17 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
 from pathlib import Path
+# Truco para omitir la validación de versión de MariaDB
+# Parche de compatibilidad para MariaDB 10.4 y Django moderno
+from django.db.backends.base.base import BaseDatabaseWrapper
+from django.db.backends.mysql.features import DatabaseFeatures
+
+# 1. Ignorar validación de versión
+BaseDatabaseWrapper.check_database_version_supported = lambda self: None
+
+# 2. Desactivar RETURNING (El error 1064 que te sale ahora)
+DatabaseFeatures.can_return_columns_from_insert = False
+DatabaseFeatures.can_return_rows_from_bulk_insert = False
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent

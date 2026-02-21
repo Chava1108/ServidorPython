@@ -8,7 +8,7 @@ from django.core.files.storage import FileSystemStorage
 from .models import *
 import os
 from .serializers import *
-from .utils import actualizar_archivo_java_desde_bd, analizar_codigo_java, generar_codigo_main, generar_plantilla_java, guardar_archivo_fisico, registrar_xapi, procesar_nombre_metodo_java 
+from .utils import *
 from .models import LogActividad # Para los logs de tesis
 import re
 from rest_framework.exceptions import ValidationError
@@ -45,13 +45,13 @@ def gestionar_atributos(request):
         serializer = AtributosSerializer(data=request.data)
         if serializer.is_valid():
             nuevo_atributo = serializer.save()
-            id_clase = nuevo_atributo.id_clase.pk
+            id_clase = nuevo_atributo.id_clase
             registrar_xapi(
-                id_clase.id_usr.id, 
+                id_clase.id_proyecto.id_usr.id, 
                 "agregó_atributo", 
                 f"Atributo '{nuevo_atributo.nombre}' ({nuevo_atributo.tipo}) a la clase '{nuevo_atributo.id_clase.nombre}'"
             )
-            actualizar_archivo_java_desde_bd(id_clase)
+            actualizar_archivo_java_desde_bd(id_clase.id)
             return Response(serializer.data, status=201)
         return Response(serializer.errors, status=400)
     
@@ -95,7 +95,7 @@ def gestionar_atributo_individual(request, id):
         id_clase_padre = atributo.id_clase.pk
         clase = Clase.objects.get(pk=id_clase_padre)
         registrar_xapi(
-                clase.id_usr.id, 
+                clase.id_proyecto.id_usr.id, 
                 "eliminó_atributo", 
                 f"Atributo '{atributo.nombre}' ({atributo.tipo}) a la clase '{atributo.id_clase.nombre}'"
         )
@@ -124,7 +124,7 @@ def gestionar_funciones(request):
         if serializer.is_valid():
             nueva_funcion = serializer.save()
             registrar_xapi(
-                nueva_funcion.id_usr.id, 
+                nueva_funcion.id_clase.id_proyecto.id, 
                 "agregó_función", 
                 f"Funcion '{nueva_funcion.nombre}' ({nueva_funcion.tipo}) a la clase '{nueva_funcion.id_clase.nombre}'"
             )
@@ -158,7 +158,7 @@ def gestionar_funcion_individual(request, id):
         if serializer.is_valid():
             funcion_actualizada = serializer.save()
             registrar_xapi(
-                funcion_actualizada.id_usr.id, 
+                funcion_actualizada.id_clase.id_proyecto.id_usr.id, 
                 "modificó_función", 
                 f"Funcion '{funcion_actualizada.nombre}' ({funcion_actualizada.tipo}) a la clase '{funcion_actualizada.id_clase.nombre}'"
             )
@@ -170,11 +170,11 @@ def gestionar_funcion_individual(request, id):
     elif request.method == 'DELETE':
         funcion_existente = Funciones.objects.get(pk=id)
         registrar_xapi(
-            funcion_existente.id_usr.id, 
+            funcion_existente.id_clase.id_proyecto.id_usr.id, 
             "eliminó_función", 
             f"Funcion '{funcion_existente.nombre}' ({funcion_existente.tipo}) a la clase '{funcion_existente.id_clase.nombre}'"
         )
-        Funciones.objects.filter(id_clase=id).delete()
+        funcion_existente.delete()
         
         actualizar_archivo_java_desde_bd(id)
         return Response({"msg": "Deleted"})
@@ -198,13 +198,14 @@ def gestionar_herencia_hijo(request, id):
 @api_view(['POST'])
 def crear_herencia(request):
     serializer = HerenciaSerializer(data=request.data)
+    print(request.data)
     if serializer.is_valid():
         herencia = serializer.save()
-        id_del_usuario = herencia.clase_hija.id_proyecto.id_usr.id
+        id_del_usuario = herencia.id_claseHijo.id_proyecto.id_usr.id
         registrar_xapi(
             id_del_usuario, 
             "creó_herencia", 
-            f"Hija: {herencia.clase_hija.nombre} extiende de Padre: {herencia.clase_padre.nombre}"
+            f"Hija: {herencia.id_claseHijo.nombre} extiende de Padre: {herencia.id_clasePadre.nombre}"
         )
         return Response(serializer.data, status=201)
     return Response(serializer.errors, status=400)
@@ -239,11 +240,12 @@ def crear_clase(request):
             nombre=datos['nombre'],
             id_proyecto=proyecto_instancia,
             nivel=datos['nivel'],
-            imagen=datos['imagen']
+            imagen=datos['imagen'],
+
         )
         print(nueva_clase)
-        codigo = generar_plantilla_java(nueva_clase.nombre, [], [])
-        ruta = guardar_archivo_fisico(datos['id_usuario'], datos['id_proyecto'], nueva_clase.nombre, codigo)
+        codigo = generar_plantilla_java(nueva_clase.nombre, [], []) if proyecto_instancia.lenguaje == 'java' else generar_plantilla_cpp(nueva_clase.nombre, [], [])
+        ruta = guardar_archivo_fisico(datos['id_usuario'], datos['id_proyecto'], nueva_clase.nombre, codigo, proyecto_instancia.lenguaje)
         nueva_clase.path_archivo = ruta
         nueva_clase.save()
         registrar_xapi(
@@ -445,15 +447,15 @@ def gestionar_clase_individual(request, id):
             
             # A. Caso: La clase que borramos es HIJA
             # Simplemente borramos el registro de la tabla Herencia.
-            Herencia.objects.filter(id_clasehijo=id).delete()
+            Herencia.objects.filter(id_claseHijo=id).delete()
 
             # B. Caso: La clase que borramos es PADRE
             # Aquí es más complejo: Los hijos quedan "huérfanos". 
             # Debemos borrar la relación Y regenerar el archivo del hijo para quitar el 'extends'.
-            relaciones_donde_soy_padre = Herencia.objects.filter(id_clasepadre=id)
+            relaciones_donde_soy_padre = Herencia.objects.filter(id_clasePadre=id)
             for relacion in relaciones_donde_soy_padre:
                 # 1. Guardamos el ID del hijo antes de borrar la relación
-                id_hijo_huerrfano = relacion.id_clasehijo.pk
+                id_hijo_huerrfano = relacion.id_claseHijo.pk
                 # 2. Borramos el registro de herencia
                 relacion.delete()
                 

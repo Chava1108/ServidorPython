@@ -13,10 +13,4 @@ public class Husky extends Perro {
         this.tamanio = tamanio;
     }
 
-    // --- Métodos Propios ---
-    private void ladrarFeo2() {
-   
-    
-    }
-
 }

@@ -126,8 +126,8 @@ def generar_plantilla_java(nombre_clase, atributos=[], metodos=[], nombre_padre=
     codigo.append("    }")
     codigo.append("")
 
-# --- MÉTODOS PROPIOS ---
-# 4. MÉTODOS PROPIOS
+    # --- MÉTODOS PROPIOS ---
+    # 4. MÉTODOS PROPIOS
     if metodos:
         codigo.append("    // --- Métodos Propios ---")
         for met in metodos:
@@ -200,6 +200,131 @@ def generar_plantilla_java(nombre_clase, atributos=[], metodos=[], nombre_padre=
                 codigo.append("")
 
     codigo.append("}")
+    return "\n".join(codigo)
+
+def generar_plantilla_cpp(nombre_clase, atributos=[], metodos=[], nombre_padre=None, atributos_padre=[], metodos_padre=[], codigo_viejo={}):
+    """
+    Genera una clase C++ completa con soporte para herencia, listas de inicialización y sobreescritura.
+    """
+    codigo = []
+    
+    # 1. INCLUDES BÁSICOS
+    codigo.append("#include <iostream>")
+    codigo.append("#include <string>")
+    codigo.append("using namespace std;")
+    codigo.append("")
+
+    # 2. DEFINICIÓN DE LA CLASE
+    if nombre_padre:
+        codigo.append(f"class {nombre_clase} : public {nombre_padre} {{")
+    else:
+        codigo.append(f"class {nombre_clase} {{")
+
+    # Organizaremos por visibilidad (estilo C++)
+    secciones = {'private': [], 'protected': [], 'public': []}
+
+    # 3. ATRIBUTOS
+    for attr in atributos:
+        vis = getattr(attr, 'nivel', 'private')
+        tipo = getattr(attr, 'tipo', 'string')
+        # Ajuste de tipos comunes de Java a C++
+        if tipo.lower() == 'string': tipo = 'string'
+        if tipo.lower() == 'boolean': tipo = 'bool'
+        
+        nom = getattr(attr, 'nombre', 'var')
+        secciones[vis].append(f"    {tipo} {nom};")
+
+    # 4. MÉTODOS Y CONSTRUCTORES (Siempre en public para este ejemplo)
+    
+    # A) Constructor Vacío
+    cons_vacio = f"    {nombre_clase}()"
+    if nombre_padre:
+        cons_vacio += f" : {nombre_padre}() {{}}"
+    else:
+        cons_vacio += " {}"
+    secciones['public'].append("// --- Constructores ---")
+    secciones['public'].append(cons_vacio)
+
+    # B) Constructor con Argumentos
+    args_cons = []
+    init_list = []
+    super_args = []
+
+    if atributos_padre:
+        for attr in atributos_padre:
+            tipo = getattr(attr, 'tipo', 'string')
+            nom = getattr(attr, 'nombre', 'p_var')
+            args_cons.append(f"{tipo} {nom}")
+            super_args.append(nom)
+
+    for attr in atributos:
+        tipo = getattr(attr, 'tipo', 'string')
+        nom = getattr(attr, 'nombre', 'var')
+        args_cons.append(f"{tipo} {nom}")
+        init_list.append(f"{nom}({nom})")
+
+    firma_cons = f"    {nombre_clase}({', '.join(args_cons)})"
+    
+    # Construcción de la lista de inicialización (estilo C++)
+    elementos_init = []
+    if nombre_padre and super_args:
+        elementos_init.append(f"{nombre_padre}({', '.join(super_args)})")
+    if init_list:
+        elementos_init.extend(init_list)
+    
+    if elementos_init:
+        firma_cons += " : " + ", ".join(elementos_init)
+    
+    secciones['public'].append(firma_cons + " {}")
+    secciones['public'].append("")
+
+    # 5. MÉTODOS PROPIOS
+    if metodos:
+        secciones['public'].append("    // --- Métodos Propios ---")
+        for met in metodos:
+            tipo = getattr(met, 'tipo', 'void')
+            nom_raw = getattr(met, 'nombre', 'metodo')
+            
+            # Normalización
+            nombre_limpio = nom_raw.split('(')[0].strip() if '(' in nom_raw else nom_raw
+            firma = nom_raw if '(' in nom_raw else f"{nom_raw}()"
+
+            metodo_str = [f"    virtual {tipo} {firma} {{"] # 'virtual' para permitir herencia
+            if nombre_limpio in codigo_viejo:
+                metodo_str.append(f"        {codigo_viejo[nombre_limpio]}")
+            elif tipo != 'void':
+                val = "0" if tipo in ['int','float','double'] else '""'
+                metodo_str.append(f"        return {val};")
+            metodo_str.append("    }")
+            secciones['public'].append("\n".join(metodo_str))
+
+    # 6. MÉTODOS HEREDADOS (Override)
+    if nombre_padre and metodos_padre:
+        secciones['public'].append(f"    // --- Sobreescritura de {nombre_padre} ---")
+        for met in metodos_padre:
+            if getattr(met, 'nivel', 'public') in ['public', 'protected']:
+                tipo = getattr(met, 'tipo', 'void')
+                nom_raw = getattr(met, 'nombre', 'metodo')
+                nombre_limpio = nom_raw.split('(')[0].strip() if '(' in nom_raw else nom_raw
+                firma = nom_raw if '(' in nom_raw else f"{nom_raw}()"
+
+                over_str = [f"    {tipo} {firma} override {{"]
+                over_str.append(f"        // Lógica de sobreescritura")
+                if tipo == 'void':
+                    over_str.append(f"        {nombre_padre}::{nombre_limpio}();")
+                else:
+                    over_str.append(f"        return {nombre_padre}::{nombre_limpio}();")
+                over_str.append("    }")
+                secciones['public'].append("\n".join(over_str))
+
+    # ENSAMBLADO FINAL
+    for vis in ['private', 'protected', 'public']:
+        if secciones[vis]:
+            codigo.append(f"{vis}:")
+            codigo.extend(secciones[vis])
+            codigo.append("")
+
+    codigo.append("};") # C++ requiere punto y coma al final
     return "\n".join(codigo)
 
 # core/utils.py
@@ -277,19 +402,30 @@ def actualizar_archivo_java_desde_bd(id_clase):
             pass # No tiene padre
 
         # 3. Generar Código
-        nuevo_codigo = generar_plantilla_java(
-            nombre_clase=clase.nombre, 
-            atributos=mis_atributos, 
-            metodos=mis_metodos,
-            nombre_padre=nombre_padre,
-            atributos_padre=atributos_heredados_completos,
-            metodos_padre=metodos_padre,
-            codigo_viejo=codigo_viejo
-        )
+        if(clase.id_proyecto.lenguaje == 'java'):
+            nuevo_codigo = generar_plantilla_java(
+                nombre_clase=clase.nombre, 
+                atributos=mis_atributos, 
+                metodos=mis_metodos,
+                nombre_padre=nombre_padre,
+                atributos_padre=atributos_heredados_completos,
+                metodos_padre=metodos_padre,
+                codigo_viejo=codigo_viejo
+            )
+        else:
+            nuevo_codigo = generar_plantilla_cpp(
+                nombre_clase=clase.nombre, 
+                atributos=mis_atributos, 
+                metodos=mis_metodos,
+                nombre_padre=nombre_padre,
+                atributos_padre=atributos_heredados_completos,
+                metodos_padre=metodos_padre,
+                codigo_viejo=codigo_viejo
+            )
 
         # 4. Guardar archivo físico
         uid = clase.id_proyecto.id_usr.id if hasattr(clase.id_proyecto.id_usr, 'id') else clase.id_proyecto.id_usr
-        ruta = guardar_archivo_fisico(uid, clase.id_proyecto.id, clase.nombre, nuevo_codigo)
+        ruta = guardar_archivo_fisico(uid, clase.id_proyecto.id, clase.nombre, nuevo_codigo, clase.id_proyecto.lenguaje)
 
         clase.path_archivo = ruta
         clase.save()
@@ -393,11 +529,11 @@ def obtener_atributos_ancestrales(id_clase):
     return atributos_acumulados
 
 import re
+import os
 
 def cosechar_codigo_existente(ruta_archivo):
     """
-    Lee un archivo Java y devuelve un diccionario:
-    { "nombreMetodo": "contenido del cuerpo...", "constructor": "contenido..." }
+    Lee un archivo (Java o C++) y devuelve un diccionario con los cuerpos de los métodos.
     """
     if not os.path.exists(ruta_archivo):
         return {}
@@ -408,12 +544,15 @@ def cosechar_codigo_existente(ruta_archivo):
         with open(ruta_archivo, 'r', encoding='utf-8') as f:
             contenido = f.read()
 
-
-        patron = r'(public|protected|private|static|\s) +[\w<>\[\]]+ +(\w+) *\([^)]*\) *\{'
+        # Regex mejorada para C++ y Java:
+        # 1. Soporta opcionalmente modificadores (public, virtual, static, etc.)
+        # 2. Soporta tipos de retorno con punteros o referencias (char*, int&)
+        # 3. Captura el nombre del método en el grupo 2
+        patron = r'(?:[\w\s]+)?\s*[\w<>\[\]*&:]+\s+(\w+)\s*\([^)]*\)\s*(?:override|final)?\s*\{'
         
         for match in re.finditer(patron, contenido):
-            nombre_metodo = match.group(2) # El nombre capturado
-            inicio_cuerpo = match.end() # Donde termina la llave {
+            nombre_metodo = match.group(1) # Ahora es el grupo 1 el nombre
+            inicio_cuerpo = match.end()
 
             llaves_abiertas = 1
             cursor = inicio_cuerpo
@@ -430,10 +569,10 @@ def cosechar_codigo_existente(ruta_archivo):
                     cuerpo += char
                 cursor += 1
             
-            # Guardamos el cuerpo limpio (sin la llave de cierre final)
-            codigo_preservado[nombre_metodo] = cuerpo
+            # Guardamos el cuerpo sin espacios en blanco innecesarios al inicio/final
+            codigo_preservado[nombre_metodo] = cuerpo.strip('\n\r')
 
     except Exception as e:
-        print(f"Error cosechando código: {e}")
+        print(f"Error cosechando código en {ruta_archivo}: {e}")
     
     return codigo_preservado
