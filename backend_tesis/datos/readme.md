@@ -1,7 +1,7 @@
 Dataset de Logs de Actividad - Proyecto POOGRAPH
 Este repositorio contiene el archivo log_actividad.csv, el cual registra las interacciones de los usuarios dentro de la herramienta educativa POOGRAPH. Este dataset es fundamental para el análisis de comportamiento y la implementación de modelos de Machine Learning enfocados en la educación.
 
-⚠️ Nota sobre los Datos Sintéticos
+Nota sobre los Datos Sintéticos
 Es importante destacar que los datos contenidos en este archivo son datos sintéticos. Fueron generados algorítmicamente mediante un script de Python para simular el comportamiento de 5 estudiantes durante un periodo de una semana de uso intensivo.
 
 Propósito de estos datos:
