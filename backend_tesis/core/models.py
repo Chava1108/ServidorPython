@@ -192,3 +192,80 @@ class LogActividad(models.Model):
 
     def __str__(self):
         return f"{self.fecha} - {self.usuario} - {self.accion}"
+
+
+# --- MODELOS PARA EXÁMENES ---
+
+class Examen(models.Model):
+    titulo = models.CharField(max_length=255)
+    creado_por = models.ForeignKey(Usuario, models.CASCADE, db_column='creado_por', related_name='examenes_creados')
+    fecha_disponible = models.DateTimeField()
+    duracion_minutos = models.IntegerField(default=30)
+    activo = models.BooleanField(default=True)
+    fecha_creacion = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        managed = True
+        db_table = 'examen'
+
+    def __str__(self):
+        return f"{self.titulo} - {self.fecha_disponible}"
+
+
+class Pregunta(models.Model):
+    examen = models.ForeignKey(Examen, models.CASCADE, db_column='id_examen', related_name='preguntas')
+    texto = models.TextField()
+    orden = models.IntegerField(default=0)
+
+    class Meta:
+        managed = True
+        db_table = 'pregunta'
+
+    def __str__(self):
+        return f"Pregunta {self.orden}: {self.texto[:50]}"
+
+
+class Opcion(models.Model):
+    pregunta = models.ForeignKey(Pregunta, models.CASCADE, db_column='id_pregunta', related_name='opciones')
+    texto = models.CharField(max_length=500)
+    es_correcta = models.BooleanField(default=False)
+    letra = models.CharField(max_length=1)  # A, B, C, D
+
+    class Meta:
+        managed = True
+        db_table = 'opcion'
+
+    def __str__(self):
+        return f"{self.letra}. {self.texto}"
+
+
+class IntentoExamen(models.Model):
+    examen = models.ForeignKey(Examen, models.CASCADE, db_column='id_examen', related_name='intentos')
+    estudiante = models.ForeignKey(Usuario, models.CASCADE, db_column='id_estudiante', related_name='intentos_examen')
+    fecha_inicio = models.DateTimeField(default=timezone.now)
+    fecha_fin = models.DateTimeField(blank=True, null=True)
+    calificacion = models.DecimalField(max_digits=5, decimal_places=2, blank=True, null=True)
+    completado = models.BooleanField(default=False)
+
+    class Meta:
+        managed = True
+        db_table = 'intento_examen'
+        unique_together = (('examen', 'estudiante'),)
+
+    def __str__(self):
+        return f"{self.estudiante} - {self.examen} - {self.calificacion}"
+
+
+class RespuestaEstudiante(models.Model):
+    intento = models.ForeignKey(IntentoExamen, models.CASCADE, db_column='id_intento', related_name='respuestas')
+    pregunta = models.ForeignKey(Pregunta, models.CASCADE, db_column='id_pregunta')
+    opcion_elegida = models.ForeignKey(Opcion, models.CASCADE, db_column='id_opcion_elegida', blank=True, null=True)
+    es_correcta = models.BooleanField(default=False)
+
+    class Meta:
+        managed = True
+        db_table = 'respuesta_estudiante'
+        unique_together = (('intento', 'pregunta'),)
+
+    def __str__(self):
+        return f"Resp: {self.pregunta} -> {self.opcion_elegida}"

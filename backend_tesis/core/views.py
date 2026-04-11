@@ -1,22 +1,19 @@
-import subprocess
 from django.conf import settings
-from rest_framework.decorators import api_view
+from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework import status
-from django.db import connection
 from django.core.files.storage import FileSystemStorage
 from .models import *
 import os
 from .serializers import *
 from .utils import *
-from .models import LogActividad # Para los logs de tesis
-import re
 from rest_framework.exceptions import ValidationError
 from django.contrib.auth import authenticate
-from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.authtoken.models import Token
 from .compile import compilar_cpp, compilar_java
+from django.utils import timezone
+from django.db import transaction
 
 # --- UTILIDAD: SUBIDA DE ARCHIVOS ---
 @api_view(['POST'])
@@ -42,67 +39,65 @@ def gestionar_atributos(request):
         return Response(serializer.data)
     
     elif request.method == 'POST':
-        serializer = AtributosSerializer(data=request.data)
-        if serializer.is_valid():
-            nuevo_atributo = serializer.save()
-            id_clase = nuevo_atributo.id_clase
+        datos = request.data
+        id_clase = datos.get('id_clase')
+        nombre = datos.get('nombre', '')
+        tipo = datos.get('tipo', '')
+        nivel = datos.get('nivel', 'private')
+        try:
+            clase_obj = Clase.objects.get(pk=id_clase)
+            proyecto = clase_obj.id_proyecto
             registrar_xapi(
-                id_clase.id_proyecto.id_usr.id, 
+                proyecto.id_usr.id, 
                 "agregó_atributo", 
-                f"Atributo '{nuevo_atributo.nombre}' ({nuevo_atributo.tipo}) a la clase '{nuevo_atributo.id_clase.nombre}'"
+                f"Atributo '{nombre}' ({tipo}) a la clase '{clase_obj.nombre}'"
             )
-            actualizar_archivo_java_desde_bd(id_clase.id)
-            return Response(serializer.data, status=201)
-        return Response(serializer.errors, status=400)
-    
-@api_view(['GET'])
-def obtenerAtributosClase(request, id):
-    if request.method == 'GET':
-        data = Atributos.objects.filter(id_clase = id)
-        serializer = AtributosSerializer(data, many=True)
-        return Response(serializer.data)
-    return Response(serializer.errors, status=400)
-
-@api_view(['GET'])
-def obtenerFuncionesClase(request, id):
-    if request.method == 'GET':
-        data = Funciones.objects.filter(id_clase = id)
-        serializer = FuncionesSerializer(data, many=True)
-        return Response(serializer.data)
-    return Response(serializer.errors, status=400)
+            nuevo_snippet = f"{nivel} {tipo} {nombre};"
+            inyectar_elemento_en_codigo(
+                ruta_archivo=clase_obj.path_archivo,
+                nuevo_contenido=nuevo_snippet,
+                lenguaje=proyecto.lenguaje,
+                es_metodo=False
+            )
+            return Response({"msg": "Atributo agregado", "nombre": nombre, "tipo": tipo}, status=201)
+        except Clase.DoesNotExist:
+            return Response({"error": "Clase no encontrada"}, status=404)
+        except Exception as e:
+            return Response({"error": str(e)}, status=500)
 
 @api_view(['PUT', 'DELETE'])
 def gestionar_atributo_individual(request, id):
-    try:
-        atributo = Atributos.objects.get(pk=id)
-    except Atributos.DoesNotExist:
-        return Response(status=404)
-
+    # Ya no se persisten atributos en BD. La edición del código se hace desde Monaco.
+    # Solo se registra la actividad xAPI.
     if request.method == 'PUT':
-        serializer = AtributosSerializer(atributo, data=request.data, partial=True)
-        if serializer.is_valid():
-            atributo_actualizado = serializer.save()
-            registrar_xapi(
-                atributo_actualizado.id_clase.id_proyecto.id_usr.id, 
-                "modificó_atributo", 
-                f"Atributo '{atributo_actualizado.nombre}' ({atributo_actualizado.tipo}) a la clase '{atributo_actualizado.id_clase.nombre}'"
-            )
-            actualizar_archivo_java_desde_bd(atributo_actualizado.id_clase.pk)
-            return Response(serializer.data)
-        return Response(serializer.errors, status=400)
+        datos = request.data
+        nombre = datos.get('nombre', '')
+        tipo = datos.get('tipo', '')
+        id_clase = datos.get('id_clase')
+        try:
+            clase_obj = Clase.objects.get(pk=id_clase) if id_clase else None
+            if clase_obj:
+                registrar_xapi(
+                    clase_obj.id_proyecto.id_usr.id, 
+                    "modificó_atributo", 
+                    f"Atributo '{nombre}' ({tipo}) en clase '{clase_obj.nombre}'"
+                )
+        except Clase.DoesNotExist:
+            pass
+        return Response({"msg": "Atributo modificado", "nombre": nombre})
 
     elif request.method == 'DELETE':
-        id_clase_padre = atributo.id_clase.pk
-        clase = Clase.objects.get(pk=id_clase_padre)
-        registrar_xapi(
-                clase.id_proyecto.id_usr.id, 
+        try:
+            atributo = Atributos.objects.get(pk=id)
+            registrar_xapi(
+                atributo.id_clase.id_proyecto.id_usr.id, 
                 "eliminó_atributo", 
-                f"Atributo '{atributo.nombre}' ({atributo.tipo}) a la clase '{atributo.id_clase.nombre}'"
-        )
-        atributo.delete() 
-        actualizar_archivo_java_desde_bd(id_clase_padre)
-        
-        return Response({"msg": "Atributo eliminado y archivo actualizado"})
+                f"Atributo '{atributo.nombre}' ({atributo.tipo}) de clase '{atributo.id_clase.nombre}'"
+            )
+            atributo.delete()  # Limpia datos legacy si existen
+        except Atributos.DoesNotExist:
+            registrar_xapi(0, "eliminó_atributo", f"Atributo eliminado (ID: {id})")
+        return Response({"msg": "Atributo eliminado"})
 
 # --- VISTAS UNIFICADAS (FUNCIONES) ---
 @api_view(['GET', 'POST'])
@@ -112,72 +107,90 @@ def gestionar_funciones(request):
         serializer = GetFuncionesSerializer(data, many=True)
         return Response(serializer.data)
     elif request.method == 'POST':
-        data = request.data.copy()
+        datos = request.data.copy()
+        nombre_nuevo = datos.get('nombre', '')
+        tipo = datos.get('tipo', '')
+        id_clase = datos.get('id_clase')
+        es_metodo = datos.get('es_metodo')
+        nivel = datos.get('nivel', 'public')
+
         try:
-            # Usamos el helper
-            if 'nombre' in data:
-                data['nombre'] = procesar_nombre_metodo_java(data['nombre'])
+            if nombre_nuevo:
+                nombre_nuevo = procesar_nombre_metodo_java(nombre_nuevo)
         except ValidationError as e:
             return Response({"error": str(e)}, status=400)
 
-        serializer = FuncionesSerializer(data=data)
-        if serializer.is_valid():
-            nueva_funcion = serializer.save()
+        try:
+            clase_obj = Clase.objects.get(pk=id_clase)
+            proyecto = clase_obj.id_proyecto
+
             registrar_xapi(
-                nueva_funcion.id_clase.id_proyecto.id, 
+                proyecto.id_usr.id, 
                 "agregó_función", 
-                f"Funcion '{nueva_funcion.nombre}' ({nueva_funcion.tipo}) a la clase '{nueva_funcion.id_clase.nombre}'"
+                f"Funcion '{nombre_nuevo}' ({tipo}) a la clase '{clase_obj.nombre}'"
             )
-            actualizar_archivo_java_desde_bd(nueva_funcion.id_clase.pk)
-            return Response(serializer.data, status=201)
-        return Response(serializer.errors, status=400)
+
+            ruta_archivo = clase_obj.path_archivo
+            if es_metodo:
+                nuevo_snippet = f"{tipo} {nombre_nuevo} {{\n\n    }}"
+            else:
+                nuevo_snippet = f"{tipo} {nombre_nuevo};"
+
+            inyectar_elemento_en_codigo(
+                ruta_archivo=ruta_archivo,
+                nuevo_contenido=nuevo_snippet,
+                lenguaje=proyecto.lenguaje,
+                es_metodo=es_metodo
+            )
+
+            return Response({"msg": "Función agregada", "nombre": nombre_nuevo, "tipo": tipo}, status=201)
+        except Clase.DoesNotExist:
+            return Response({"error": "Clase no encontrada"}, status=404)
+        except Exception as e:
+            return Response({"error": str(e)}, status=500)
+    
+
 
 @api_view(['PUT', 'DELETE'])
 def gestionar_funcion_individual(request, id):
+    # Ya no se persisten funciones en BD. La edición del código se hace desde Monaco.
+    # Solo se registra la actividad xAPI.
     if request.method == 'PUT':
-        try:
-            # 1. Buscamos la función que vamos a editar
-            funcion_existente = Funciones.objects.get(pk=id)
-        except Funciones.DoesNotExist:
-            return Response({"error": "Función no encontrada"}, status=404)
+        datos = request.data.copy()
+        nombre = datos.get('nombre', '')
+        tipo = datos.get('tipo', '')
+        id_clase = datos.get('id_clase')
 
-        # 2. Copiamos la data entrante
-        data = request.data.copy()
-
-        # 3. APLICAMOS LA MISMA LÓGICA DE LIMPIEZA
         try:
-            # Solo procesamos si el usuario envió el campo 'nombre' para cambiarlo
-            if 'nombre' in data:
-                data['nombre'] = procesar_nombre_metodo_java(data['nombre'])
+            if nombre:
+                nombre = procesar_nombre_metodo_java(nombre)
         except ValidationError as e:
             return Response({"error": str(e)}, status=400)
 
-        # 4. Pasamos la instancia a editar al Serializer
-        serializer = FuncionesSerializer(funcion_existente, data=data) # <--- OJO: Pasar instancia
-        
-        if serializer.is_valid():
-            funcion_actualizada = serializer.save()
-            registrar_xapi(
-                funcion_actualizada.id_clase.id_proyecto.id_usr.id, 
-                "modificó_función", 
-                f"Funcion '{funcion_actualizada.nombre}' ({funcion_actualizada.tipo}) a la clase '{funcion_actualizada.id_clase.nombre}'"
-            )
-            actualizar_archivo_java_desde_bd(funcion_actualizada.id_clase.pk)
-            
-            return Response(serializer.data)
-            
-        return Response(serializer.errors, status=400)
+        try:
+            clase_obj = Clase.objects.get(pk=id_clase) if id_clase else None
+            if clase_obj:
+                registrar_xapi(
+                    clase_obj.id_proyecto.id_usr.id, 
+                    "modificó_función", 
+                    f"Funcion '{nombre}' ({tipo}) en clase '{clase_obj.nombre}'"
+                )
+        except Clase.DoesNotExist:
+            pass
+        return Response({"msg": "Función modificada", "nombre": nombre})
+
     elif request.method == 'DELETE':
-        funcion_existente = Funciones.objects.get(pk=id)
-        registrar_xapi(
-            funcion_existente.id_clase.id_proyecto.id_usr.id, 
-            "eliminó_función", 
-            f"Funcion '{funcion_existente.nombre}' ({funcion_existente.tipo}) a la clase '{funcion_existente.id_clase.nombre}'"
-        )
-        funcion_existente.delete()
-        
-        actualizar_archivo_java_desde_bd(id)
-        return Response({"msg": "Deleted"})
+        try:
+            funcion = Funciones.objects.get(pk=id)
+            registrar_xapi(
+                funcion.id_clase.id_proyecto.id_usr.id, 
+                "eliminó_función", 
+                f"Funcion '{funcion.nombre}' ({funcion.tipo}) de clase '{funcion.id_clase.nombre}'"
+            )
+            funcion.delete()  # Limpia datos legacy si existen
+        except Funciones.DoesNotExist:
+            registrar_xapi(0, "eliminó_función", f"Función eliminada (ID: {id})")
+        return Response({"msg": "Función eliminada"})
 
 # --- VISTAS UNIFICADAS (HERENCIA) ---
 @api_view(['GET', 'DELETE'])
@@ -234,7 +247,7 @@ def crear_clase(request):
     datos = request.data
     try:
         
-        print(datos) 
+
         proyecto_instancia = Proyecto.objects.get(pk=datos['id_proyecto'])
         nueva_clase = Clase.objects.create(
             nombre=datos['nombre'],
@@ -243,11 +256,12 @@ def crear_clase(request):
             imagen=datos['imagen'],
 
         )
-        print(nueva_clase)
+        nombre_ext = "cpp" if proyecto_instancia.lenguaje  == 'cpp' else "java"
         codigo = generar_plantilla_java(nueva_clase.nombre, [], []) if proyecto_instancia.lenguaje == 'java' else generar_plantilla_cpp(nueva_clase.nombre, [], [])
         ruta = guardar_archivo_fisico(datos['id_usuario'], datos['id_proyecto'], nueva_clase.nombre, codigo, proyecto_instancia.lenguaje)
         nueva_clase.path_archivo = ruta
         nueva_clase.save()
+        actualizar_codigo_main(datos['id_usuario'],datos['id_proyecto'], datos['nombre'], proyecto_instancia.lenguaje)
         registrar_xapi(
             datos['id_usuario'], 
             "creó_clase", 
@@ -300,22 +314,18 @@ def crear_proyecto(request):
         )
         try:
             # 1. Generar código
-            codigo_main = generar_codigo_main(proyecto_nuevo.lenguaje)
+            actualizar_codigo_main(proyecto_nuevo.id_usr.pk,proyecto_nuevo.id, "", proyecto_nuevo.lenguaje)
+            ruta_relativa_carpeta = os.path.join('codigos_fuente', f'usuario_{proyecto_nuevo.id_usr.pk}', f'proyecto_{proyecto_nuevo.id}')
+            ruta_absoluta_carpeta = os.path.join(settings.BASE_DIR, ruta_relativa_carpeta)
             
-            # 2. Guardar archivo físico (Main.java)
-            ruta_main = guardar_archivo_fisico(
-                usuario_id=proyecto_nuevo.id_usr.pk, # O el campo que uses para usuario
-                proyecto_id=proyecto_nuevo.pk,
-                nombre_clase="Main",
-                codigo_texto=codigo_main,
-                lenguaje=proyecto_nuevo.lenguaje
-            )
-            
+            extension = '.cpp' if proyecto_nuevo.lenguaje == 'cpp' else '.java'
+            nombre_archivo = f"Main{extension}"
+            ruta_absoluta_archivo = os.path.join(ruta_absoluta_carpeta, nombre_archivo)
 
             Clase.objects.create(
                 nombre="Main",
                 id_proyecto=proyecto_nuevo, # Pasamos la instancia del proyecto recién creado
-                path_archivo=ruta_main,
+                path_archivo=ruta_absoluta_archivo,
 
             )
             
@@ -326,111 +336,8 @@ def crear_proyecto(request):
         return Response(serializer.data, status=201)
     return Response(serializer.errors, status=400)
 
-# --- STORED PROCEDURES ---
-@api_view(['GET'])
-def get_atributos_heredados(request, id):
-    with connection.cursor() as cursor:
-        cursor.callproc('getAtributosHeredados', [id])
-        results = cursor.fetchall()
-        if cursor.description:
-            columns = [col[0] for col in cursor.description]
-            json_result = [dict(zip(columns, row)) for row in results]
-            return Response(json_result)
-        return Response([])
 
-# --- TESIS: PARSER & LOGS ---
-@api_view(['POST'])
-def parsear_codigo(request):
-    codigo = request.data.get('codigo', '')
-    usuario_id = request.data.get('usuario', 'Desconocido')
-    
-    if not codigo:
-        return Response({"error": "No se envió código"}, status=400)
-
-    # 1. Analizar con javalang
-    resultado = analizar_codigo_java(codigo)
-    
-    # 2. Guardar Log
-    tiene_errores = len(resultado['errores']) > 0
-    accion = "intento_diagramar_error" if tiene_errores else "intento_diagramar_exito"
-    
-    LogActividad.objects.create(
-        usuario=usuario_id,
-        accion=accion,
-        detalle=f"Errores: {resultado['errores']}" if tiene_errores else "Sintaxis correcta"
-    )
-
-    return Response(resultado)
-
-@api_view(['POST'])
-def registrar_log(request):
-    serializer = LogSerializer(data=request.data)
-    if serializer.is_valid():
-        serializer.save()
-        return Response({"status": "Log guardado"}, status=201)
-    return Response(serializer.errors, status=400)
-
-@api_view(['POST'])
-def crear_clase_con_codigo(request):
-    """
-    Recibe: {
-        "nombre": "Perro",
-        "id_proyecto": 1,
-        "atributos": [...],
-        "metodos": [...]
-    }
-    Acción: Crea registro en BD, genera código Java y guarda el archivo físico.
-    """
-    datos = request.data
-    nombre = datos.get('nombre')
-    id_proyecto = datos.get('id_proyecto')
-    atributos = datos.get('atributos', []) # Lista vacía si no envían nada
-    metodos = datos.get('metodos', [])
-
-    # 1. Validaciones básicas
-    if not nombre or not id_proyecto:
-        return Response({"error": "Faltan datos obligatorios"}, status=400)
-
-    try:
-        # 2. Generamos el String del código Java
-        codigo_fuente = generar_plantilla_java(nombre, atributos, metodos)
-
-        # 3. Guardamos el archivo físico en el servidor
-        # (Asumimos usuario_id = 1 temporalmente o extráelo del request si tienes auth)
-        ruta_archivo = guardar_archivo_fisico(
-            usuario_id=1, 
-            proyecto_id=id_proyecto, 
-            nombre_clase=nombre, 
-            codigo_texto=codigo_fuente
-        )
-
-        # 4. Guardamos en Base de Datos (Modelo Clase)
-        # Nota: Ajusta los campos según tu modelo real
-        nueva_clase = Clase.objects.create(
-            nombre=nombre,
-            id_proyecto=id_proyecto,
-            path_archivo=ruta_archivo,  # Guardamos la ruta del archivo físico
-            codigo_fuente=codigo_fuente, # Opcional: si quieres respaldo en texto en BD
-            # ... otros campos por defecto ...
-        )
-
-        # 5. Guardamos los atributos/métodos en sus tablas relacionales (si las usas)
-        # Esto es para que el diagrama se dibuje bien al recargar
-        # ... lógica para insertar en tabla 'atributo' y 'metodo' ...
-
-        return Response({
-            "msg": "Clase creada exitosamente",
-            "id": nueva_clase.pk,
-            "path": ruta_archivo,
-            "codigo": codigo_fuente
-        })
-
-    except Exception as e:
-        return Response({"error": str(e)}, status=500)
-
-
-
-@api_view(['GET', 'DELETE', 'PATCH'])
+@api_view(['GET', 'DELETE'])
 def gestionar_clase_individual(request, id):
     try:
         clase = Clase.objects.get(pk=id)
@@ -438,8 +345,7 @@ def gestionar_clase_individual(request, id):
         return Response(status=404)
 
     if request.method == 'GET':
-        clases = Clase.objects.filter(id=id)
-        serializer = Clase(clases, many=True)
+        serializer = ClaseSerializer(clase)
         return Response(serializer.data)
     elif request.method == 'DELETE':
         try:
@@ -461,8 +367,8 @@ def gestionar_clase_individual(request, id):
                 
                 # 3. REGENERAMOS el archivo del hijo inmediatamente
                 actualizar_archivo_java_desde_bd(id_hijo_huerrfano)
-
-
+            proyecto_instancia = Proyecto.objects.get(pk=clase.id_proyecto)
+            eliminar_vinculo_main(clase.id, clase.id_proyecto, clase.nombre, proyecto_instancia.lenguaje)
             Atributos.objects.filter(id_clase=id).delete()
             Funciones.objects.filter(id_clase=id).delete()
 
@@ -711,3 +617,277 @@ def logout_view(request):
 
     # 2. Respuesta
     return Response({'mensaje': 'Sesión cerrada y registrada'}, status=200)
+
+
+@api_view(['POST'])
+def registrar_tooltip(request):
+    """
+    Registra cuando un estudiante consulta un tooltip o intenta pegar código.
+    Payload: { id_usuario, palabra, lenguaje }
+    """
+    id_usuario = request.data.get('id_usuario')
+    palabra = request.data.get('palabra', '')
+    lenguaje = request.data.get('lenguaje', '')
+
+    if not id_usuario or not palabra:
+        return Response({"error": "Faltan datos"}, status=400)
+
+    if palabra == 'INTENTO_PEGAR':
+        verbo = "intentó_pegar_código"
+        detalle = f"Intento de pegar código en editor (Lenguaje: {lenguaje})"
+    else:
+        verbo = "consultó_tooltip"
+        detalle = f"Palabra: '{palabra}' (Lenguaje: {lenguaje})"
+
+    registrar_xapi(id_usuario, verbo, detalle)
+    return Response({"msg": "Evento registrado"}, status=200)
+
+
+# ============================================================
+# --- VISTAS DE EXÁMENES ---
+# ============================================================
+
+@api_view(['POST'])
+def crear_examen(request):
+    """
+    Crea un examen completo con preguntas y opciones en una sola petición.
+    Payload: { titulo, fecha_disponible, duracion_minutos, creado_por,
+               preguntas: [ { texto, orden, opciones: [ { texto, letra, es_correcta } ] } ] }
+    """
+    datos = request.data
+    try:
+        with transaction.atomic():
+            creador = Usuario.objects.get(pk=datos['creado_por'])
+            examen = Examen.objects.create(
+                titulo=datos['titulo'],
+                creado_por=creador,
+                fecha_disponible=datos['fecha_disponible'],
+                duracion_minutos=datos.get('duracion_minutos', 30),
+            )
+
+            for p_data in datos.get('preguntas', []):
+                pregunta = Pregunta.objects.create(
+                    examen=examen,
+                    texto=p_data['texto'],
+                    orden=p_data.get('orden', 0),
+                )
+                for op_data in p_data.get('opciones', []):
+                    Opcion.objects.create(
+                        pregunta=pregunta,
+                        texto=op_data['texto'],
+                        letra=op_data['letra'],
+                        es_correcta=op_data.get('es_correcta', False),
+                    )
+
+            registrar_xapi(
+                creador.id,
+                "creó_examen",
+                f"Examen '{examen.titulo}' con {len(datos.get('preguntas', []))} preguntas. Disponible: {examen.fecha_disponible}"
+            )
+
+        serializer = ExamenSerializer(examen)
+        return Response(serializer.data, status=201)
+
+    except Usuario.DoesNotExist:
+        return Response({"error": "Usuario no encontrado"}, status=404)
+    except Exception as e:
+        return Response({"error": str(e)}, status=500)
+
+
+@api_view(['GET'])
+def listar_examenes(request):
+    """Lista todos los exámenes activos."""
+    examenes = Examen.objects.filter(activo=True).order_by('-fecha_creacion')
+    serializer = ExamenListSerializer(examenes, many=True)
+    return Response(serializer.data)
+
+
+@api_view(['GET'])
+def listar_examenes_disponibles(request, id_estudiante):
+    """
+    Lista exámenes cuya fecha_disponible ya pasó y que el estudiante NO ha completado.
+    """
+    ahora = timezone.now()
+    examenes_completados = IntentoExamen.objects.filter(
+        estudiante_id=id_estudiante, completado=True
+    ).values_list('examen_id', flat=True)
+
+    examenes = Examen.objects.filter(
+        activo=True,
+        fecha_disponible__lte=ahora
+    ).exclude(id__in=examenes_completados).order_by('-fecha_disponible')
+
+    serializer = ExamenListSerializer(examenes, many=True)
+    return Response(serializer.data)
+
+
+@api_view(['GET'])
+def obtener_examen_estudiante(request, id_examen):
+    """
+    Devuelve el examen con preguntas y opciones, SIN marcar cuál es correcta.
+    Para uso del estudiante al responder.
+    """
+    try:
+        examen = Examen.objects.get(pk=id_examen, activo=True)
+    except Examen.DoesNotExist:
+        return Response({"error": "Examen no encontrado"}, status=404)
+
+    data = {
+        "id": examen.id,
+        "titulo": examen.titulo,
+        "duracion_minutos": examen.duracion_minutos,
+        "fecha_disponible": examen.fecha_disponible,
+        "preguntas": []
+    }
+
+    for pregunta in examen.preguntas.all().order_by('orden'):
+        p_data = {
+            "id": pregunta.id,
+            "texto": pregunta.texto,
+            "orden": pregunta.orden,
+            "opciones": []
+        }
+        for opcion in pregunta.opciones.all():
+            p_data["opciones"].append({
+                "id": opcion.id,
+                "texto": opcion.texto,
+                "letra": opcion.letra,
+                # NO enviamos es_correcta al estudiante
+            })
+        data["preguntas"].append(p_data)
+
+    return Response(data)
+
+
+@api_view(['POST'])
+def iniciar_intento_examen(request):
+    """
+    Registra que un estudiante inició un examen.
+    Payload: { id_examen, id_estudiante }
+    """
+    id_examen = request.data.get('id_examen')
+    id_estudiante = request.data.get('id_estudiante')
+
+    try:
+        examen = Examen.objects.get(pk=id_examen, activo=True)
+        estudiante = Usuario.objects.get(pk=id_estudiante)
+    except (Examen.DoesNotExist, Usuario.DoesNotExist):
+        return Response({"error": "Examen o estudiante no encontrado"}, status=404)
+
+    # Verificar si ya tiene un intento
+    intento_existente = IntentoExamen.objects.filter(
+        examen=examen, estudiante=estudiante
+    ).first()
+
+    if intento_existente:
+        if intento_existente.completado:
+            return Response({"error": "Ya completaste este examen"}, status=400)
+        serializer = IntentoExamenSerializer(intento_existente)
+        return Response(serializer.data)
+
+    intento = IntentoExamen.objects.create(
+        examen=examen,
+        estudiante=estudiante,
+    )
+
+    registrar_xapi(
+        id_estudiante,
+        "inició_examen",
+        f"Examen '{examen.titulo}' (ID: {examen.id})"
+    )
+
+    serializer = IntentoExamenSerializer(intento)
+    return Response(serializer.data, status=201)
+
+
+@api_view(['POST'])
+def enviar_respuestas_examen(request):
+    """
+    Recibe las respuestas del estudiante, califica y guarda.
+    Payload: { id_intento, respuestas: [ { id_pregunta, id_opcion_elegida } ] }
+    """
+    id_intento = request.data.get('id_intento')
+    respuestas = request.data.get('respuestas', [])
+
+    try:
+        intento = IntentoExamen.objects.get(pk=id_intento)
+    except IntentoExamen.DoesNotExist:
+        return Response({"error": "Intento no encontrado"}, status=404)
+
+    if intento.completado:
+        return Response({"error": "Este examen ya fue completado"}, status=400)
+
+    total_preguntas = intento.examen.preguntas.count()
+    correctas = 0
+
+    with transaction.atomic():
+        for resp in respuestas:
+            id_pregunta = resp.get('id_pregunta')
+            id_opcion = resp.get('id_opcion_elegida')
+
+            try:
+                pregunta = Pregunta.objects.get(pk=id_pregunta)
+                opcion = Opcion.objects.get(pk=id_opcion) if id_opcion else None
+            except (Pregunta.DoesNotExist, Opcion.DoesNotExist):
+                continue
+
+            es_correcta = opcion.es_correcta if opcion else False
+            if es_correcta:
+                correctas += 1
+
+            RespuestaEstudiante.objects.update_or_create(
+                intento=intento,
+                pregunta=pregunta,
+                defaults={
+                    'opcion_elegida': opcion,
+                    'es_correcta': es_correcta,
+                }
+            )
+
+        calificacion = (correctas / total_preguntas * 100) if total_preguntas > 0 else 0
+        intento.calificacion = round(calificacion, 2)
+        intento.completado = True
+        intento.fecha_fin = timezone.now()
+        intento.save()
+
+    registrar_xapi(
+        intento.estudiante.id,
+        "completó_examen",
+        f"Examen '{intento.examen.titulo}' | Calificación: {intento.calificacion}% | "
+        f"Correctas: {correctas}/{total_preguntas}"
+    )
+
+    return Response({
+        "msg": "Examen calificado",
+        "calificacion": intento.calificacion,
+        "correctas": correctas,
+        "total": total_preguntas,
+    })
+
+
+@api_view(['GET'])
+def resultados_examen_estudiante(request, id_intento):
+    """Devuelve el detalle de un intento: respuestas, qué eligió, qué era correcto."""
+    try:
+        intento = IntentoExamen.objects.get(pk=id_intento)
+    except IntentoExamen.DoesNotExist:
+        return Response({"error": "Intento no encontrado"}, status=404)
+
+    data = {
+        "examen": intento.examen.titulo,
+        "calificacion": intento.calificacion,
+        "fecha_inicio": intento.fecha_inicio,
+        "fecha_fin": intento.fecha_fin,
+        "respuestas": []
+    }
+
+    for resp in intento.respuestas.all().select_related('pregunta', 'opcion_elegida'):
+        opcion_correcta = resp.pregunta.opciones.filter(es_correcta=True).first()
+        data["respuestas"].append({
+            "pregunta": resp.pregunta.texto,
+            "opcion_elegida": resp.opcion_elegida.texto if resp.opcion_elegida else "Sin respuesta",
+            "opcion_correcta": opcion_correcta.texto if opcion_correcta else "N/A",
+            "es_correcta": resp.es_correcta,
+        })
+
+    return Response(data)

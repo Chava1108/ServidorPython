@@ -207,10 +207,14 @@ def generar_plantilla_cpp(nombre_clase, atributos=[], metodos=[], nombre_padre=N
     Genera una clase C++ completa con soporte para herencia, listas de inicialización y sobreescritura.
     """
     codigo = []
-    
+    codigo.append("#pragma once")
     # 1. INCLUDES BÁSICOS
     codigo.append("#include <iostream>")
     codigo.append("#include <string>")
+
+    if nombre_padre:
+        codigo.append(f'#include "{nombre_padre}.cpp"')
+
     codigo.append("using namespace std;")
     codigo.append("")
 
@@ -440,18 +444,66 @@ def actualizar_archivo_java_desde_bd(id_clase):
         print(f"Error regenerando archivo ID {id_clase}: {e}")
         return False
     
-def generar_codigo_main(lenguaje):
-    codigo = ""
+import os
+
+def actualizar_codigo_main(usuario_id, proyecto_id, nombre_clase, lenguaje):
+    """
+    Localiza el archivo Main e inyecta la nueva clase.
+    Si nombre_clase llega vacío, solo asegura la existencia del Main base.
+    """
+    # 1. Construcción de rutas dinámicas
+    ruta_relativa_carpeta = os.path.join('codigos_fuente', f'usuario_{usuario_id}', f'proyecto_{proyecto_id}')
+    ruta_absoluta_carpeta = os.path.join(settings.BASE_DIR, ruta_relativa_carpeta)
+    
+    extension = '.cpp' if lenguaje == 'cpp' else '.java'
+    nombre_archivo = f"Main{extension}"
+    ruta_absoluta_archivo = os.path.join(ruta_absoluta_carpeta, nombre_archivo)
+
+    # 2. Crear la estructura base si no existe (indispensable para el arranque)
+    if not os.path.exists(ruta_absoluta_archivo):
+        if not os.path.exists(ruta_absoluta_carpeta):
+            os.makedirs(ruta_absoluta_carpeta)
+            
+        with open(ruta_absoluta_archivo, 'w', encoding='utf-8') as f:
+            if lenguaje == 'cpp':
+                # Incluimos el #pragma once que acordamos para evitar redefiniciones
+                f.write('#pragma once\n#include <iostream>\nusing namespace std;\n\nint main() {\n    return 0;\n}')
+            else:
+                f.write('public class Main {\n    public static void main(String[] args) {\n    }\n}')
+
+    # --- VALIDACIÓN DE NOMBRE VACÍO ---
+    # Si no hay nombre de clase (clase inicial o Main recién creado), 
+    # terminamos aquí para no insertar basura.
+    if not nombre_clase or nombre_clase.strip() == "":
+        return
+
+    # 3. Configuración de la línea a inyectar
     if lenguaje == 'cpp':
-        codigo = '#include <iostream>\nusing namespace std;\n\nint main() {\n    cout << "Hola Mundo C++" << endl;\n    return 0;\n}'
+        nueva_linea = f'#include "{nombre_clase}.cpp"'
+        ancla = "using namespace std;"
     else:
-        codigo = """public class Main {
-            public static void main(String[] args) {
-                // Instancia tus clases aquí y prueba tus métodos
-                System.out.println("Hola Mundo desde el Main!");
-            }
-            }"""
-    return codigo
+        nueva_linea = f"// Clase {nombre_clase} vinculada"
+        ancla = "public class Main {"
+
+    # 4. Leer e Inyectar quirúrgicamente
+    with open(ruta_absoluta_archivo, 'r', encoding='utf-8') as f:
+        lineas = f.readlines()
+
+    # Evitar duplicados (idempotencia)
+    if any(nueva_linea in linea for linea in lineas):
+        return 
+
+    nuevo_contenido = []
+    insertado = False
+    for linea in lineas:
+        nuevo_contenido.append(linea)
+        if ancla in linea and not insertado:
+            nuevo_contenido.append(f"{nueva_linea}\n")
+            insertado = True
+
+    # 5. Guardar cambios respetando el código previo del alumno
+    with open(ruta_absoluta_archivo, 'w', encoding='utf-8') as f:
+        f.writelines(nuevo_contenido)
 
 def registrar_xapi(actor, verbo, objeto=""):
     print(f"Entro a guardarLog actor: {actor}, verbo: {verbo}")
@@ -576,3 +628,98 @@ def cosechar_codigo_existente(ruta_archivo):
         print(f"Error cosechando código en {ruta_archivo}: {e}")
     
     return codigo_preservado
+
+def obtener_padre_desde_codigo(ruta_completa, lenguaje):
+    if not os.path.exists(ruta_completa):
+        return None
+    
+    try:
+        with open(ruta_completa, 'r', encoding='utf-8') as f:
+            contenido = f.read()
+            
+        if lenguaje.lower() == 'java':
+            # Busca: public class Hijo extends Padre
+            match = re.search(r'class\s+\w+\s+extends\s+(\w+)', contenido)
+        else:
+            # Busca: class Hijo : public Padre
+            match = re.search(r'class\s+\w+\s*:\s*public\s+(\w+)', contenido)
+            
+        return match.group(1) if match else None
+    except Exception:
+        return None
+
+def eliminar_vinculo_main(usuario_id, proyecto_id, nombre_clase, lenguaje):
+    """
+    Busca y elimina la línea de vinculación de una clase en el archivo Main.
+    """
+    # 1. Construcción de ruta (idéntica a la de creación)
+    ruta_relativa = os.path.join('codigos_fuente', f'usuario_{usuario_id}', f'proyecto_{proyecto_id}')
+    ruta_absoluta_carpeta = os.path.join(settings.BASE_DIR, ruta_relativa)
+    
+    extension = '.cpp' if lenguaje == 'cpp' else '.java'
+    ruta_archivo = os.path.join(ruta_absoluta_carpeta, f"Main{extension}")
+
+    # Si por alguna razón el Main no existe, no hay nada que limpiar
+    if not os.path.exists(ruta_archivo):
+        return
+
+    # 2. Definir qué línea estamos buscando para borrar
+    if lenguaje == 'cpp':
+        linea_a_borrar = f'#include "{nombre_clase}.cpp"'
+    else:
+        linea_a_borrar = f"// Clase {nombre_clase} vinculada"
+
+    # 3. Leer y filtrar
+    with open(ruta_archivo, 'r', encoding='utf-8') as f:
+        lineas = f.readlines()
+
+    # Creamos una nueva lista de líneas EXCLUYENDO la que queremos borrar
+    # Usamos .strip() para comparar sin preocuparnos por saltos de línea
+    nuevas_lineas = [l for l in lineas if linea_a_borrar not in l]
+
+    # 4. Guardar el archivo limpio
+    with open(ruta_archivo, 'w', encoding='utf-8') as f:
+        f.writelines(nuevas_lineas)
+
+def inyectar_elemento_en_codigo(ruta_archivo, nuevo_contenido, lenguaje, es_metodo=False):
+    """
+    Inserta un atributo o método en el archivo físico sin alterar el resto del código.
+    Inserta ANTES del último cierre de la clase (} o };) para evitar desplazar código.
+    """
+    if not os.path.exists(ruta_archivo):
+        return False
+
+    with open(ruta_archivo, 'r', encoding='utf-8') as f:
+        lineas = f.readlines()
+
+    # Evitar duplicados: Si el elemento ya existe, no hacemos nada
+    if any(nuevo_contenido.strip() in l.strip() for l in lineas):
+        return True
+
+    # Buscar la ÚLTIMA llave de cierre de la clase (} para Java, }; para C++)
+    indice_cierre = -1
+    for i in range(len(lineas) - 1, -1, -1):
+        linea_strip = lineas[i].strip()
+        if lenguaje == 'cpp' and linea_strip == '};':
+            indice_cierre = i
+            break
+        elif lenguaje != 'cpp' and linea_strip == '}':
+            indice_cierre = i
+            break
+
+    if indice_cierre == -1:
+        return False
+
+    # Construir la línea a insertar con indentación correcta
+    if es_metodo:
+        linea_nueva = f"\n    {nuevo_contenido}\n\n"
+    else:
+        linea_nueva = f"    {nuevo_contenido}\n"
+
+    # Insertar ANTES de la llave de cierre
+    lineas.insert(indice_cierre, linea_nueva)
+
+    with open(ruta_archivo, 'w', encoding='utf-8') as f:
+        f.writelines(lineas)
+    
+    return True

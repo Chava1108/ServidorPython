@@ -17,21 +17,17 @@ urlpatterns = [
     path('clases', views.crear_clase), # POST
     path('clase/<int:id>', views.gestionar_clase_individual), # DELETE
 
-    # --- ATRIBUTOS (UNIFICADO) ---
-    # GET: lista, POST: crear
+    # --- ATRIBUTOS ---
+    # POST: crear, GET: lista
     path('atributos', views.gestionar_atributos),
-    # PUT: actualizar uno, DELETE: borrar todos de una clase
+    # PUT: modificar, DELETE: eliminar
     path('atributos/<int:id>', views.gestionar_atributo_individual),
-    # STORED PROCEDURE
-    path('atributosHeredados/<int:id>', views.get_atributos_heredados),
-    path('atributosClases/<int:id>', views.obtenerAtributosClase),
 
-    # --- FUNCIONES (UNIFICADO) ---
-    # GET: lista, POST: crear
+    # --- FUNCIONES ---
+    # POST: crear, GET: lista
     path('funciones', views.gestionar_funciones),
-    # PUT: actualizar uno, DELETE: borrar todos de una clase
+    # PUT: modificar, DELETE: eliminar
     path('funciones/<int:id>', views.gestionar_funcion_individual),
-    path('funcionesClases/<int:id>', views.obtenerFuncionesClase),
     # --- HERENCIA ---
     # GET: lista (por proyecto), DELETE: borrar hijo
     path('herencia/<int:id>', views.gestionar_herencia_hijo),
@@ -48,10 +44,6 @@ urlpatterns = [
     path('proyectoIndividual', views.get_proyecto_individual),
     path('proyecto', views.crear_proyecto),
 
-    # --- TESIS: PARSER Y LOGS ---
-    path('parsear', views.parsear_codigo),
-    path('logs', views.registrar_log),
-
     path('clases/<int:id>/codigo', views.obtener_codigo_clase),
     path('archivos-proyecto/<int:proyecto_id>', views.listar_archivos_proyecto),
     path('leer-archivo', views.leer_archivo_fisico),
@@ -59,6 +51,16 @@ urlpatterns = [
     path('guardar-archivo', views.guardar_archivo_cambios),
     path('api/login/', views.login_view, name='login'),
     path('api/logout/', views.logout_view, name='logout'),
+    path('api/tooltip-log', views.registrar_tooltip),
+
+    # --- EXÁMENES ---
+    path('examenes/crear', views.crear_examen),
+    path('examenes', views.listar_examenes),
+    path('examenes/disponibles/<int:id_estudiante>', views.listar_examenes_disponibles),
+    path('examenes/<int:id_examen>/estudiante', views.obtener_examen_estudiante),
+    path('examenes/iniciar', views.iniciar_intento_examen),
+    path('examenes/enviar', views.enviar_respuestas_examen),
+    path('examenes/resultados/<int:id_intento>', views.resultados_examen_estudiante),
 ]
 
 # Configuración para servir imágenes en modo DEBUG
