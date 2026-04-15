@@ -1,0 +1,81 @@
+
+================================================================================
+TABLA DE CARACTERÍSTICAS POR USUARIO
+================================================================================
+         total_acciones  errores  tasa_error  compilaciones_ok  uso_herencia  uso_protected  clases_creadas  metodos_creados  tiempo_sesion_min  sesiones_inactivas  rendimiento rendimiento_etq
+usuario                                                                                                                                                                                         
+1                   164       19        0.12                15            22             15               7               30           26622.12                   4            2            Alto
+2                   311       38        0.12                47            32             20              27               40           73845.15                   8            2            Alto
+3                   138       17        0.12                 8            11             15               9               24          115841.70                   4            2            Alto
+4                   493       64        0.13                41            45             18              50               70          114115.85                  10            2            Alto
+5                   387       57        0.15                36            31             26              42               48           98178.63                   8            2            Alto
+6                   256       31        0.12                24            24             17              28               37           92861.40                   4            2            Alto
+7                   298       29        0.10                35            23             10              34               37           56606.30                   6            2            Alto
+8                   237       34        0.14                20            13             17              29               22           70812.60                   5            2            Alto
+9                    16        3        0.19                 0             4              1               4                1              67.18                   0            2            Alto
+10                    2        0        0.00                 0             0              0               1                0               7.45                   0            1           Medio
+11                    2        0        0.00                 0             0              0               1                0               2.48                   0            0            Bajo
+12                    2        0        0.00                 0             0              0               1                0               4.50                   0            2            Alto
+13                    2        0        0.00                 0             0              0               1                0               3.25                   0            1           Medio
+14                    2        0        0.00                 0             0              0               1                0               6.92                   0            0            Bajo
+15                    2        0        0.00                 0             0              0               1                0               2.10                   0            0            Bajo
+16                    2        0        0.00                 0             0              0               1                0               3.65                   0            0            Bajo
+17                    2        0        0.00                 0             0              0               1                0               6.80                   0            1           Medio
+18                    2        0        0.00                 0             0              0               1                0               6.12                   0            1           Medio
+19                    2        0        0.00                 0             0              0               1                0               4.95                   0            1           Medio
+20                    2        0        0.00                 0             0              0               1                0               5.48                   0            0            Bajo
+21                    2        0        0.00                 0             0              0               1                0               0.95                   0            1           Medio
+22                    2        0        0.00                 0             0              0               1                0               1.80                   0            0            Bajo
+23                    2        0        0.00                 0             0              0               1                0               7.82                   0            0            Bajo
+24                    2        0        0.00                 0             0              0               1                0               4.42                   0            1           Medio
+25                    2        0        0.00                 0             0              0               1                0               0.82                   0            1           Medio
+26                    2        0        0.00                 0             0              0               1                0               2.23                   0            1           Medio
+27                    2        0        0.00                 0             0              0               1                0               1.58                   0            0            Bajo
+28                    2        0        0.00                 0             0              0               1                0               5.15                   0            1           Medio
+29                    2        1        0.50                 0             0              0               1                0               5.20                   0            0            Bajo
+30                    2        0        0.00                 0             0              0               1                0               6.48                   0            0            Bajo
+31                    2        0        0.00                 0             0              0               1                0               4.78                   0            1           Medio
+32                    2        0        0.00                 0             0              0               1                0               2.72                   0            0            Bajo
+33                    2        0        0.00                 0             0              0               1                0               0.85                   0            0            Bajo
+34                    2        0        0.00                 0             0              0               1                0               4.85                   0            2            Alto
+35                    2        0        0.00                 0             0              0               1                0               3.58                   0            2            Alto
+
+Distribución de rendimiento:
+rendimiento
+Alto     12
+Bajo     12
+Medio    11
+Total usuarios: 35
+
+================================================================================
+ENTRENAMIENTO DEL MODELO RANDOM FOREST
+================================================================================
+
+Precisión (Accuracy): 0.29
+
+Reporte de Clasificación:
+              precision    recall  f1-score   support
+
+        Bajo       0.67      0.33      0.44         6
+       Medio       0.00      0.00      0.00         1
+        Alto       0.00      0.00      0.00         0
+
+    accuracy                           0.29         7
+   macro avg       0.22      0.11      0.15         7
+weighted avg       0.57      0.29      0.38         7
+
+Matriz de Confusión:
+[[2 3 1]
+ [1 0 0]
+ [0 0 0]]
+
+Importancia de Características:
+  tiempo_sesion_min      0.6718  #################################
+  errores                0.0955  ####
+  guardados              0.0541  ##
+  tasa_error             0.0529  ##
+  uso_protected          0.0377  #
+  uso_herencia           0.0297  #
+  total_acciones         0.0283  #
+  sesiones_inactivas     0.0178  
+  compilaciones_ok       0.0123  

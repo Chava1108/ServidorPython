@@ -4,7 +4,7 @@ from skrebate import ReliefF
 from sklearn.preprocessing import LabelEncoder
 import os
 
-# 1. Rutas de archivos
+
 ruta_datos = os.path.join('..', 'datos', 'log_actividad.csv')
 ruta_salida = 'caracteristicas_seleccionadas.csv'
 
