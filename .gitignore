@@ -9,4 +9,5 @@ media/
 # Entorno virtual (Ajusta el nombre si el tuyo es distinto)
 venv/
 env/
+Laboratorio/
 .env

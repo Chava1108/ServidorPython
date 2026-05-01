@@ -14,6 +14,60 @@ from rest_framework.authtoken.models import Token
 from .compile import compilar_cpp, compilar_java
 from django.utils import timezone
 from django.db import transaction
+from datetime import timedelta
+import re
+
+# --- REGISTRO DE USUARIO ---
+@api_view(['POST'])
+def register_view(request):
+    data = request.data
+    username = data.get('username', '').strip()
+    email = data.get('email', '').strip()
+    password = data.get('password', '')
+    name = data.get('name', '').strip()
+    genero = data.get('genero', '')
+    edad = data.get('edad')
+    nivel_socioeconomico = data.get('nivel_socioeconomico', '')
+    semestre = data.get('semestre')
+
+    # Validaciones
+    if not username or not email or not password or not name:
+        return Response({'error': 'Todos los campos obligatorios son requeridos.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    # Validar formato de correo institucional: al + 6 dígitos + @edu.uaa.mx
+    if not re.match(r'^al\d{6}@edu\.uaa\.mx$', email, re.IGNORECASE):
+        return Response({'error': 'El correo debe tener el formato al000000@edu.uaa.mx'}, status=status.HTTP_400_BAD_REQUEST)
+
+    # Validar unicidad de correo
+    if Usuario.objects.filter(email=email).exists():
+        return Response({'error': 'Este correo ya está registrado.'}, status=status.HTTP_409_CONFLICT)
+
+    # Validar unicidad de username
+    if Usuario.objects.filter(username=username).exists():
+        return Response({'error': 'Este nombre de usuario ya existe.'}, status=status.HTTP_409_CONFLICT)
+
+    try:
+        extra = {}
+        if name:
+            extra['name'] = name
+        if genero:
+            extra['genero'] = genero
+        if edad:
+            extra['edad'] = int(edad)
+        if nivel_socioeconomico:
+            extra['nivel_socioeconomico'] = nivel_socioeconomico
+        if semestre:
+            extra['semestre'] = int(semestre)
+
+        user = Usuario.objects.create_user(
+            username=username,
+            email=email,
+            password=password,
+            **extra
+        )
+        return Response({'id': user.id, 'mensaje': 'Usuario registrado correctamente.'}, status=status.HTTP_201_CREATED)
+    except Exception as e:
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 # --- UTILIDAD: SUBIDA DE ARCHIVOS ---
 @api_view(['POST'])
@@ -31,202 +85,274 @@ def welcome(request):
     return Response("Welcome")
 
 # --- VISTAS UNIFICADAS (ATRIBUTOS) ---
-@api_view(['GET', 'POST'])
+# Ahora los atributos se leen directamente del archivo fuente.
+# POST solo inyecta en el archivo. No hay tabla en BD.
+@api_view(['POST'])
 def gestionar_atributos(request):
-    if request.method == 'GET':
-        data = Getatributos.objects.all()
-        serializer = GetAtributosSerializer(data, many=True)
-        return Response(serializer.data)
-    
-    elif request.method == 'POST':
-        datos = request.data
-        id_clase = datos.get('id_clase')
-        nombre = datos.get('nombre', '')
-        tipo = datos.get('tipo', '')
-        nivel = datos.get('nivel', 'private')
-        try:
-            clase_obj = Clase.objects.get(pk=id_clase)
-            proyecto = clase_obj.id_proyecto
-            registrar_xapi(
-                proyecto.id_usr.id, 
-                "agregó_atributo", 
-                f"Atributo '{nombre}' ({tipo}) a la clase '{clase_obj.nombre}'"
-            )
+    datos = request.data
+    id_clase = datos.get('id_clase')
+    nombre = datos.get('nombre', '')
+    tipo = datos.get('tipo', '')
+    nivel = datos.get('nivel', 'private')
+    try:
+        clase_obj = Clase.objects.get(pk=id_clase)
+        proyecto = clase_obj.id_proyecto
+        registrar_xapi(
+            proyecto.id_usr.id,
+            "agregó_atributo",
+            f"Atributo '{nombre}' ({tipo}) a la clase '{clase_obj.nombre}'"
+        )
+        # En C++ el snippet NO lleva modificador de acceso (va bajo la sección public:/private:)
+        # En Java SÍ lleva el modificador por línea
+        if proyecto.lenguaje == 'cpp':
+            nuevo_snippet = f"{tipo} {nombre};"
+        else:
             nuevo_snippet = f"{nivel} {tipo} {nombre};"
-            inyectar_elemento_en_codigo(
-                ruta_archivo=clase_obj.path_archivo,
-                nuevo_contenido=nuevo_snippet,
-                lenguaje=proyecto.lenguaje,
-                es_metodo=False
-            )
-            return Response({"msg": "Atributo agregado", "nombre": nombre, "tipo": tipo}, status=201)
-        except Clase.DoesNotExist:
-            return Response({"error": "Clase no encontrada"}, status=404)
-        except Exception as e:
-            return Response({"error": str(e)}, status=500)
+        inyectar_elemento_en_codigo(
+            ruta_archivo=clase_obj.path_archivo,
+            nuevo_contenido=nuevo_snippet,
+            lenguaje=proyecto.lenguaje,
+            es_metodo=False,
+            nivel=nivel
+        )
+        return Response({"msg": "Atributo agregado", "nombre": nombre, "tipo": tipo}, status=201)
+    except Clase.DoesNotExist:
+        return Response({"error": "Clase no encontrada"}, status=404)
+    except Exception as e:
+        return Response({"error": str(e)}, status=500)
 
-@api_view(['PUT', 'DELETE'])
-def gestionar_atributo_individual(request, id):
-    # Ya no se persisten atributos en BD. La edición del código se hace desde Monaco.
-    # Solo se registra la actividad xAPI.
-    if request.method == 'PUT':
-        datos = request.data
-        nombre = datos.get('nombre', '')
-        tipo = datos.get('tipo', '')
-        id_clase = datos.get('id_clase')
-        try:
-            clase_obj = Clase.objects.get(pk=id_clase) if id_clase else None
-            if clase_obj:
-                registrar_xapi(
-                    clase_obj.id_proyecto.id_usr.id, 
-                    "modificó_atributo", 
-                    f"Atributo '{nombre}' ({tipo}) en clase '{clase_obj.nombre}'"
-                )
-        except Clase.DoesNotExist:
-            pass
-        return Response({"msg": "Atributo modificado", "nombre": nombre})
-
-    elif request.method == 'DELETE':
-        try:
-            atributo = Atributos.objects.get(pk=id)
-            registrar_xapi(
-                atributo.id_clase.id_proyecto.id_usr.id, 
-                "eliminó_atributo", 
-                f"Atributo '{atributo.nombre}' ({atributo.tipo}) de clase '{atributo.id_clase.nombre}'"
-            )
-            atributo.delete()  # Limpia datos legacy si existen
-        except Atributos.DoesNotExist:
-            registrar_xapi(0, "eliminó_atributo", f"Atributo eliminado (ID: {id})")
-        return Response({"msg": "Atributo eliminado"})
 
 # --- VISTAS UNIFICADAS (FUNCIONES) ---
-@api_view(['GET', 'POST'])
-def gestionar_funciones(request):
-    if request.method == 'GET':
-        data = Getfunciones.objects.all()
-        serializer = GetFuncionesSerializer(data, many=True)
-        return Response(serializer.data)
-    elif request.method == 'POST':
-        datos = request.data.copy()
-        nombre_nuevo = datos.get('nombre', '')
-        tipo = datos.get('tipo', '')
-        id_clase = datos.get('id_clase')
-        es_metodo = datos.get('es_metodo')
-        nivel = datos.get('nivel', 'public')
-
-        try:
-            if nombre_nuevo:
-                nombre_nuevo = procesar_nombre_metodo_java(nombre_nuevo)
-        except ValidationError as e:
-            return Response({"error": str(e)}, status=400)
-
-        try:
-            clase_obj = Clase.objects.get(pk=id_clase)
-            proyecto = clase_obj.id_proyecto
-
-            registrar_xapi(
-                proyecto.id_usr.id, 
-                "agregó_función", 
-                f"Funcion '{nombre_nuevo}' ({tipo}) a la clase '{clase_obj.nombre}'"
-            )
-
-            ruta_archivo = clase_obj.path_archivo
-            if es_metodo:
-                nuevo_snippet = f"{tipo} {nombre_nuevo} {{\n\n    }}"
-            else:
-                nuevo_snippet = f"{tipo} {nombre_nuevo};"
-
-            inyectar_elemento_en_codigo(
-                ruta_archivo=ruta_archivo,
-                nuevo_contenido=nuevo_snippet,
-                lenguaje=proyecto.lenguaje,
-                es_metodo=es_metodo
-            )
-
-            return Response({"msg": "Función agregada", "nombre": nombre_nuevo, "tipo": tipo}, status=201)
-        except Clase.DoesNotExist:
-            return Response({"error": "Clase no encontrada"}, status=404)
-        except Exception as e:
-            return Response({"error": str(e)}, status=500)
-    
-
-
-@api_view(['PUT', 'DELETE'])
-def gestionar_funcion_individual(request, id):
-    # Ya no se persisten funciones en BD. La edición del código se hace desde Monaco.
-    # Solo se registra la actividad xAPI.
-    if request.method == 'PUT':
-        datos = request.data.copy()
-        nombre = datos.get('nombre', '')
-        tipo = datos.get('tipo', '')
-        id_clase = datos.get('id_clase')
-
-        try:
-            if nombre:
-                nombre = procesar_nombre_metodo_java(nombre)
-        except ValidationError as e:
-            return Response({"error": str(e)}, status=400)
-
-        try:
-            clase_obj = Clase.objects.get(pk=id_clase) if id_clase else None
-            if clase_obj:
-                registrar_xapi(
-                    clase_obj.id_proyecto.id_usr.id, 
-                    "modificó_función", 
-                    f"Funcion '{nombre}' ({tipo}) en clase '{clase_obj.nombre}'"
-                )
-        except Clase.DoesNotExist:
-            pass
-        return Response({"msg": "Función modificada", "nombre": nombre})
-
-    elif request.method == 'DELETE':
-        try:
-            funcion = Funciones.objects.get(pk=id)
-            registrar_xapi(
-                funcion.id_clase.id_proyecto.id_usr.id, 
-                "eliminó_función", 
-                f"Funcion '{funcion.nombre}' ({funcion.tipo}) de clase '{funcion.id_clase.nombre}'"
-            )
-            funcion.delete()  # Limpia datos legacy si existen
-        except Funciones.DoesNotExist:
-            registrar_xapi(0, "eliminó_función", f"Función eliminada (ID: {id})")
-        return Response({"msg": "Función eliminada"})
-
-# --- VISTAS UNIFICADAS (HERENCIA) ---
-@api_view(['GET', 'DELETE'])
-def gestionar_herencia_hijo(request, id):
-    """
-    GET /herencia/:id -> Trae herencias filtradas por PROYECTO (id es id_proyecto)
-    DELETE /herencia/:id -> Borra herencia filtrada por HIJO (id es id_claseHijo)
-    """
-    if request.method == 'GET':
-        data = Herenciaf.objects.filter(id_proyecto=id)
-        serializer = HerenciaFSerializer(data, many=True)
-        return Response(serializer.data)
-
-    elif request.method == 'DELETE':
-        Herencia.objects.filter(id_clasehijo=id).delete()
-        return Response({"msg": "Deleted"})
-
+# POST solo inyecta en el archivo. No hay tabla en BD.
 @api_view(['POST'])
-def crear_herencia(request):
-    serializer = HerenciaSerializer(data=request.data)
-    print(request.data)
-    if serializer.is_valid():
-        herencia = serializer.save()
-        id_del_usuario = herencia.id_claseHijo.id_proyecto.id_usr.id
-        registrar_xapi(
-            id_del_usuario, 
-            "creó_herencia", 
-            f"Hija: {herencia.id_claseHijo.nombre} extiende de Padre: {herencia.id_clasePadre.nombre}"
-        )
-        return Response(serializer.data, status=201)
-    return Response(serializer.errors, status=400)
+def gestionar_funciones(request):
+    datos = request.data.copy()
+    nombre_nuevo = datos.get('nombre', '')
+    tipo = datos.get('tipo', '')
+    id_clase = datos.get('id_clase')
+    es_metodo = datos.get('es_metodo', True)
+    nivel = datos.get('nivel', 'public')
 
-@api_view(['DELETE'])
-def eliminar_herencia_padre(request, id):
-    Herencia.objects.filter(id_clasepadre=id).delete()
-    return Response({"msg": "Deleted"})
+    try:
+        if nombre_nuevo:
+            nombre_nuevo = procesar_nombre_metodo_java(nombre_nuevo)
+    except ValidationError as e:
+        return Response({"error": str(e)}, status=400)
+
+    try:
+        clase_obj = Clase.objects.get(pk=id_clase)
+        proyecto = clase_obj.id_proyecto
+
+        registrar_xapi(
+            proyecto.id_usr.id,
+            "agregó_función",
+            f"Funcion '{nombre_nuevo}' ({tipo}) a la clase '{clase_obj.nombre}'"
+        )
+
+        ruta_archivo = clase_obj.path_archivo
+        if es_metodo:
+            if proyecto.lenguaje == 'cpp':
+                nuevo_snippet = f"virtual {tipo} {nombre_nuevo} {{\n    }}"
+            else:
+                nuevo_snippet = f"{nivel} {tipo} {nombre_nuevo} {{\n    }}"
+        else:
+            if proyecto.lenguaje == 'cpp':
+                nuevo_snippet = f"{tipo} {nombre_nuevo};"
+            else:
+                nuevo_snippet = f"{nivel} {tipo} {nombre_nuevo};"
+
+        inyectar_elemento_en_codigo(
+            ruta_archivo=ruta_archivo,
+            nuevo_contenido=nuevo_snippet,
+            lenguaje=proyecto.lenguaje,
+            es_metodo=es_metodo,
+            nivel=nivel
+        )
+
+        return Response({"msg": "Función agregada", "nombre": nombre_nuevo, "tipo": tipo}, status=201)
+    except Clase.DoesNotExist:
+        return Response({"error": "Clase no encontrada"}, status=404)
+    except Exception as e:
+        return Response({"error": str(e)}, status=500)
+
+
+# --- HERENCIA ---
+@api_view(['POST'])
+def agregar_herencia(request):
+    """
+    Modifica el archivo fuente de la clase hija para agregar 'extends ClasePadre' (Java)
+    o ': public ClasePadre' (C++).
+    Payload: { "id_clase_hija": int, "nombre_padre": str }
+    """
+    id_clase_hija = request.data.get('id_clase_hija')
+    nombre_padre = request.data.get('nombre_padre', '').strip()
+
+    if not id_clase_hija or not nombre_padre:
+        return Response({"error": "Faltan datos (id_clase_hija, nombre_padre)"}, status=400)
+
+    try:
+        clase_hija = Clase.objects.get(pk=id_clase_hija)
+        proyecto = clase_hija.id_proyecto
+        ruta_completa = os.path.join(settings.BASE_DIR, clase_hija.path_archivo) if clase_hija.path_archivo else None
+
+        if not ruta_completa or not os.path.exists(ruta_completa):
+            return Response({"error": "Archivo fuente no encontrado"}, status=404)
+
+        with open(ruta_completa, 'r', encoding='utf-8') as f:
+            contenido = f.read()
+
+        if proyecto.lenguaje == 'cpp':
+            # C++: class Hijo { → class Hijo : public Padre {
+            patron = re.compile(r'(class\s+' + re.escape(clase_hija.nombre) + r')\s*(\{)')
+            ya_hereda = re.search(r'class\s+' + re.escape(clase_hija.nombre) + r'\s*:', contenido)
+            if ya_hereda:
+                # Ya hereda, reemplazar el padre
+                patron_existente = re.compile(
+                    r'(class\s+' + re.escape(clase_hija.nombre) + r'\s*:\s*public\s+)\w+'
+                )
+                contenido = patron_existente.sub(r'\g<1>' + nombre_padre, contenido)
+            else:
+                contenido = patron.sub(r'\1 : public ' + nombre_padre + r' \2', contenido)
+        else:
+            # Java: public class Hijo { → public class Hijo extends Padre {
+            patron = re.compile(r'((?:public\s+)?class\s+' + re.escape(clase_hija.nombre) + r')\s*(\{)')
+            ya_hereda = re.search(r'class\s+' + re.escape(clase_hija.nombre) + r'\s+extends\s+', contenido)
+            if ya_hereda:
+                # Ya hereda, reemplazar el padre
+                patron_existente = re.compile(
+                    r'((?:public\s+)?class\s+' + re.escape(clase_hija.nombre) + r'\s+extends\s+)\w+'
+                )
+                contenido = patron_existente.sub(r'\g<1>' + nombre_padre, contenido)
+            else:
+                contenido = patron.sub(r'\1 extends ' + nombre_padre + r' \2', contenido)
+
+        with open(ruta_completa, 'w', encoding='utf-8') as f:
+            f.write(contenido)
+
+        registrar_xapi(
+            proyecto.id_usr.id,
+            "agregó_herencia",
+            f"Clase '{clase_hija.nombre}' ahora hereda de '{nombre_padre}'"
+        )
+
+        return Response({"msg": f"Herencia agregada: {clase_hija.nombre} extends {nombre_padre}"}, status=200)
+
+    except Clase.DoesNotExist:
+        return Response({"error": "Clase no encontrada"}, status=404)
+    except Exception as e:
+        return Response({"error": str(e)}, status=500)
+
+
+# --- INFORMACIÓN COMPLETA DE CLASE (propios + heredados, desde archivos) ---
+@api_view(['GET'])
+def obtener_info_completa_clase(request, id_clase):
+    """
+    Devuelve atributos/funciones propios y heredados de una clase,
+    analizando directamente los archivos fuente y recorriendo la cadena de herencia.
+    """
+    try:
+        clase = Clase.objects.get(pk=id_clase)
+    except Clase.DoesNotExist:
+        return Response({'error': 'Clase no encontrada'}, status=404)
+
+    user_id = request.query_params.get('user_id', 0)
+    registrar_xapi(user_id, "consultó_info_clase", f"Clase: {clase.nombre} (ID: {id_clase})")
+
+    # Analizar archivo de la clase actual → atributos y funciones propios
+    info_propia = analizar_archivo_clase(clase)
+    atributos_propios = info_propia['atributos']
+    funciones_propias = info_propia['funciones']
+
+    # Recorrer cadena de herencia hacia arriba usando los archivos
+    atributos_heredados = []
+    funciones_heredadas = []
+    atributos_no_accesibles = []
+    funciones_no_accesibles = []
+    clases_padre = []
+
+    nombre_padre = info_propia['padre']
+    visitados = {clase.nombre}
+    proyecto_id = clase.id_proyecto_id
+
+    while nombre_padre and nombre_padre not in visitados:
+        visitados.add(nombre_padre)
+        try:
+            padre = Clase.objects.get(nombre=nombre_padre, id_proyecto=proyecto_id)
+        except Clase.DoesNotExist:
+            break
+
+        clases_padre.append({'id': padre.id, 'nombre': padre.nombre})
+
+        info_padre = analizar_archivo_clase(padre)
+
+        for a in info_padre['atributos']:
+            a['clase_origen'] = padre.nombre
+            if a.get('nivel', '').lower() == 'private':
+                atributos_no_accesibles.append(a)
+            else:
+                atributos_heredados.append(a)
+
+        ruta_padre = os.path.join(settings.BASE_DIR, padre.path_archivo) if padre.path_archivo else None
+        for f in info_padre['funciones']:
+            f['clase_origen'] = padre.nombre
+            f['id_clase_padre'] = padre.id
+            f['codigo'] = extraer_codigo_funcion_desde_archivo(
+                ruta_padre, f['nombre'], f['tipo']
+            )
+            if f.get('nivel', '').lower() == 'private':
+                funciones_no_accesibles.append(f)
+            else:
+                funciones_heredadas.append(f)
+
+        nombre_padre = info_padre['padre']
+
+    return Response({
+        'clase': {'id': clase.id, 'nombre': clase.nombre},
+        'atributos_propios': atributos_propios,
+        'funciones_propias': funciones_propias,
+        'atributos_heredados': atributos_heredados,
+        'funciones_heredadas': funciones_heredadas,
+        'atributos_no_accesibles': atributos_no_accesibles,
+        'funciones_no_accesibles': funciones_no_accesibles,
+        'clases_padre': clases_padre,
+    })
+
+
+@api_view(['GET'])
+def obtener_codigo_funcion(request, id_clase):
+    """
+    Endpoint para obtener el código de una función desde el archivo fuente.
+    Recibe nombre_funcion y tipo_retorno como query params.
+    """
+    try:
+        clase = Clase.objects.get(pk=id_clase)
+    except Clase.DoesNotExist:
+        return Response({'error': 'Clase no encontrada'}, status=404)
+
+    nombre_funcion = request.query_params.get('nombre', '')
+    tipo_retorno = request.query_params.get('tipo', '')
+
+    user_id = request.query_params.get('user_id', 0)
+    registrar_xapi(
+        user_id,
+        "consultó_código_función_heredada",
+        f"Función: {nombre_funcion} de Clase: {clase.nombre}"
+    )
+
+    ruta = os.path.join(settings.BASE_DIR, clase.path_archivo) if clase.path_archivo else None
+    codigo = extraer_codigo_funcion_desde_archivo(ruta, nombre_funcion, tipo_retorno)
+
+    if not codigo and clase.path_archivo:
+        ruta_full = os.path.join(settings.BASE_DIR, clase.path_archivo)
+        if os.path.exists(ruta_full):
+            with open(ruta_full, 'r', encoding='utf-8') as f:
+                codigo = f.read()
+
+    return Response({
+        'codigo': codigo,
+        'funcion': nombre_funcion,
+        'clase': clase.nombre,
+    })
 
 # --- CLASES Y PROYECTOS (CONSULTAS SIMPLES) ---
 @api_view(['GET'])
@@ -349,31 +475,10 @@ def gestionar_clase_individual(request, id):
         return Response(serializer.data)
     elif request.method == 'DELETE':
         try:
-            # --- PASO 1: GESTIONAR HERENCIA (CRÍTICO) ---
-            
-            # A. Caso: La clase que borramos es HIJA
-            # Simplemente borramos el registro de la tabla Herencia.
-            Herencia.objects.filter(id_claseHijo=id).delete()
+            proyecto_instancia = Proyecto.objects.get(pk=clase.id_proyecto_id)
+            eliminar_vinculo_main(clase.id, clase.id_proyecto_id, clase.nombre, proyecto_instancia.lenguaje)
 
-            # B. Caso: La clase que borramos es PADRE
-            # Aquí es más complejo: Los hijos quedan "huérfanos". 
-            # Debemos borrar la relación Y regenerar el archivo del hijo para quitar el 'extends'.
-            relaciones_donde_soy_padre = Herencia.objects.filter(id_clasePadre=id)
-            for relacion in relaciones_donde_soy_padre:
-                # 1. Guardamos el ID del hijo antes de borrar la relación
-                id_hijo_huerrfano = relacion.id_claseHijo.pk
-                # 2. Borramos el registro de herencia
-                relacion.delete()
-                
-                # 3. REGENERAMOS el archivo del hijo inmediatamente
-                actualizar_archivo_java_desde_bd(id_hijo_huerrfano)
-            proyecto_instancia = Proyecto.objects.get(pk=clase.id_proyecto)
-            eliminar_vinculo_main(clase.id, clase.id_proyecto, clase.nombre, proyecto_instancia.lenguaje)
-            Atributos.objects.filter(id_clase=id).delete()
-            Funciones.objects.filter(id_clase=id).delete()
-
-
-            # --- PASO 3: BORRAR ARCHIVO FÍSICO ---
+            # --- BORRAR ARCHIVO FÍSICO ---
             if clase.path_archivo:
                 full_path = os.path.join(settings.BASE_DIR, clase.path_archivo)
                 if os.path.exists(full_path):
@@ -382,11 +487,10 @@ def gestionar_clase_individual(request, id):
                     except Exception as e:
                         print(f"No se pudo borrar el archivo físico: {e}")
 
-
-            # --- PASO 4: BORRAR LA CLASE FINALMENTE ---
+            # --- BORRAR LA CLASE ---
             clase.delete()
             
-            return Response({"msg": "Clase eliminada y todas sus referencias limpiadas correctamente"})
+            return Response({"msg": "Clase eliminada correctamente"})
             
         except Exception as e:
             return Response({"error": str(e)}, status=500)
@@ -475,6 +579,7 @@ def leer_archivo_fisico(request):
 @api_view(['POST'])
 def compilar_y_ejecutar_proyecto(request):
     id_proyecto = request.data.get('id_proyecto')
+    id_usuario_actual = request.data.get('id_usuario_actual')
     entradas_usuario = request.data.get('entradas', "")
     
     if entradas_usuario and not entradas_usuario.endswith('\n'):
@@ -483,9 +588,12 @@ def compilar_y_ejecutar_proyecto(request):
     try:
         # 1. Obtener datos
         proyecto = Proyecto.objects.get(pk=id_proyecto)
-        uid = proyecto.id_usr.id if hasattr(proyecto.id_usr, 'id') else proyecto.id_usr
+        # ID del dueño del proyecto (para la ruta de archivos)
+        id_dueno = proyecto.id_usr.id if hasattr(proyecto.id_usr, 'id') else proyecto.id_usr
+        # ID del usuario logueado (para logs de actividad)
+        uid = int(id_usuario_actual) if id_usuario_actual else id_dueno
         
-        ruta_relativa = os.path.join('codigos_fuente', f'usuario_{uid}', f'proyecto_{proyecto.id}')
+        ruta_relativa = os.path.join('codigos_fuente', f'usuario_{id_dueno}', f'proyecto_{proyecto.id}')
         ruta_absoluta = os.path.join(settings.BASE_DIR, ruta_relativa)
 
         if not os.path.exists(ruta_absoluta):
@@ -587,6 +695,7 @@ def login_view(request):
                 'id': user.id,
                 'username': user.username,
                 'token': token.key,
+                'is_admin': 1 if user.is_admin else 0,
                 'mensaje': 'Login exitoso'
             }, status=status.HTTP_200_OK)
         else:
@@ -891,3 +1000,130 @@ def resultados_examen_estudiante(request, id_intento):
         })
 
     return Response(data)
+
+
+# ============================================================
+# --- DASHBOARD DE MONITOREO (ADMIN) ---
+# ============================================================
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def dashboard_analytics(request):
+    """
+    Endpoint para el dashboard del admin.
+    Devuelve métricas agregadas del log de actividad.
+    Query params opcionales: ?usuario_id=X&dias=14
+    """
+    # Verificar que sea admin
+    if not request.user.is_admin:
+        return Response({"error": "Acceso denegado"}, status=403)
+
+    usuario_id = request.query_params.get('usuario_id')
+    dias = int(request.query_params.get('dias', 14))
+    fecha_limite = timezone.now() - timedelta(days=dias)
+
+    # Base queryset
+    logs = LogActividad.objects.filter(fecha__gte=fecha_limite)
+    if usuario_id:
+        logs = logs.filter(usuario=str(usuario_id))
+
+    # --- 1. Tiempo en sesión por día ---
+    from django.db.models import Min, Max
+    from django.db.models.functions import TruncDate
+    from collections import defaultdict
+    import datetime
+
+    sesiones_por_dia = defaultdict(float)
+    # Agrupamos login/logout por usuario para calcular duración
+    usuarios_ids = logs.values_list('usuario', flat=True).distinct()
+
+    for uid in usuarios_ids:
+        user_logs = logs.filter(usuario=uid).order_by('fecha')
+        logins = user_logs.filter(accion='inició_sesión')
+        logouts = user_logs.filter(accion__in=['cerró_sesión_manual', 'cerró_sesión_inactividad', 'cerró_sesión'])
+
+        for login_ev in logins:
+            # Buscar el logout más cercano posterior
+            logout_ev = logouts.filter(fecha__gt=login_ev.fecha).first()
+            if logout_ev:
+                duracion_min = (logout_ev.fecha - login_ev.fecha).total_seconds() / 60.0
+                # Cap a 120 min por sesión para evitar outliers
+                duracion_min = min(duracion_min, 120)
+                dia = login_ev.fecha.date().isoformat()
+                sesiones_por_dia[dia] += duracion_min
+
+    tiempo_sesion = [{"fecha": k, "minutos": round(v, 1)} for k, v in sorted(sesiones_por_dia.items())]
+
+    # --- 2. Errores de compilación por día ---
+    errores_compilacion = []
+    compilaciones_error = logs.filter(
+        accion='compiló_proyecto',
+        detalle__icontains='error'
+    ).values_list('fecha', flat=True)
+    errores_por_dia = defaultdict(int)
+    for fecha in compilaciones_error:
+        errores_por_dia[fecha.date().isoformat()] += 1
+    errores_compilacion = [{"fecha": k, "cantidad": v} for k, v in sorted(errores_por_dia.items())]
+
+    # --- 3. Compilaciones exitosas por día ---
+    compilaciones_ok = logs.filter(
+        accion='compiló_proyecto',
+        detalle__icontains='exitosa'
+    ).values_list('fecha', flat=True)
+    ok_por_dia = defaultdict(int)
+    for fecha in compilaciones_ok:
+        ok_por_dia[fecha.date().isoformat()] += 1
+    exitos_compilacion = [{"fecha": k, "cantidad": v} for k, v in sorted(ok_por_dia.items())]
+
+    # --- 4. Tiempo viendo diagramas por día ---
+    diagrama_por_dia = defaultdict(float)
+    for uid in usuarios_ids:
+        user_logs = logs.filter(usuario=uid).order_by('fecha')
+        mostrar_evs = user_logs.filter(accion='MOSTRAR_DIAGRAMA')
+        ocultar_evs = user_logs.filter(accion='OCULTAR_DIAGRAMA')
+
+        for mostrar in mostrar_evs:
+            ocultar = ocultar_evs.filter(fecha__gt=mostrar.fecha).first()
+            if ocultar:
+                duracion_min = (ocultar.fecha - mostrar.fecha).total_seconds() / 60.0
+                duracion_min = min(duracion_min, 60)
+                dia = mostrar.fecha.date().isoformat()
+                diagrama_por_dia[dia] += duracion_min
+
+    tiempo_diagramas = [{"fecha": k, "minutos": round(v, 1)} for k, v in sorted(diagrama_por_dia.items())]
+
+    # --- 5. Resumen general ---
+    total_tooltips = logs.filter(accion='consultó_tooltip').count()
+    total_pegados = logs.filter(accion='intentó_pegar_código').count()
+    total_compilaciones = logs.filter(accion='compiló_proyecto').count()
+    total_errores = logs.filter(accion='compiló_proyecto', detalle__icontains='error').count()
+    total_exitos = logs.filter(accion='compiló_proyecto', detalle__icontains='exitosa').count()
+    total_sesiones = logs.filter(accion='inició_sesión').count()
+
+    # --- 6. Acciones por tipo (para gráfica de pastel) ---
+    from django.db.models import Count
+    acciones_resumen = list(
+        logs.values('accion').annotate(total=Count('id')).order_by('-total')
+    )
+
+    # --- 7. Lista de usuarios para el filtro ---
+    usuarios_list = list(
+        Usuario.objects.filter(is_admin=False).values('id', 'name', 'username')
+    )
+
+    return Response({
+        "tiempo_sesion_por_dia": tiempo_sesion,
+        "errores_compilacion_por_dia": errores_compilacion,
+        "exitos_compilacion_por_dia": exitos_compilacion,
+        "tiempo_diagramas_por_dia": tiempo_diagramas,
+        "resumen": {
+            "total_tooltips": total_tooltips,
+            "total_pegados": total_pegados,
+            "total_compilaciones": total_compilaciones,
+            "total_errores": total_errores,
+            "total_exitos": total_exitos,
+            "total_sesiones": total_sesiones,
+        },
+        "acciones_resumen": acciones_resumen,
+        "usuarios": usuarios_list,
+    })

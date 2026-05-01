@@ -120,12 +120,13 @@ class Proyecto(models.Model):
 
     
 class UsuarioManager(BaseUserManager):
-    def create_user(self, username, email, password=None):
+    def create_user(self, username, email, password=None, **extra_fields):
         if not username:
             raise ValueError('El usuario debe tener un username')
         user = self.model(
             username=username,
             email=self.normalize_email(email),
+            **extra_fields,
         )
         user.set_password(password) # Encripta la contraseña
         user.save(using=self._db)
@@ -147,6 +148,24 @@ class Usuario(AbstractBaseUser):
     # El campo 'password' YA EXISTE en AbstractBaseUser, 
     # así que puedes borrar tu definición de password si la tenías,
     # o dejarla si quieres configurar max_length específico.
+    
+    # --- CAMPOS DE LEARNING ANALYTICS ---
+    GENERO_CHOICES = [
+        ('M', 'Masculino'),
+        ('F', 'Femenino'),
+        ('O', 'Otro'),
+    ]
+    NIVEL_SOCIOECONOMICO_CHOICES = [
+        ('bajo', 'Bajo'),
+        ('medio_bajo', 'Medio-Bajo'),
+        ('medio', 'Medio'),
+        ('medio_alto', 'Medio-Alto'),
+        ('alto', 'Alto'),
+    ]
+    genero = models.CharField(max_length=1, choices=GENERO_CHOICES, blank=True, default='')
+    edad = models.PositiveIntegerField(null=True, blank=True)
+    nivel_socioeconomico = models.CharField(max_length=20, choices=NIVEL_SOCIOECONOMICO_CHOICES, blank=True, default='')
+    semestre = models.PositiveIntegerField(null=True, blank=True)
     
     # --- CAMPOS NUEVOS REQUERIDOS POR DJANGO ---
     # Django necesita estos flags para saber si el usuario puede entrar

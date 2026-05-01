@@ -1,0 +1,373 @@
+¿Qué es un Objeto?
+•	Los objetos son representaciones (simples/complejas) (reales/imaginarias) de cosas: reloj, avión, coche 
+•	 No todo puede ser considerado como un objeto, algunas cosas son simplemente características o atributos de los objetos: color, velocidad, nombre
+ 
+Abstracción funcional
+Hay cosas que sabemos que los coches hacen, pero no cómo lo hacen:
+ • avanzar • parar • girar a la derecha • girar a la izquierda
+Abstracción de datos
+Un coche tiene además ciertos atributos: 
+• color • velocidad • tamaño • etc.
+ 
+Clases							     Objetos
+ 
+Ejercicio. Sobrecarga de métodos
+La sobrecarga de métodos se refiere a que una clase puede poseer múltiples métodos con el mismo nombre. Es requisito que cada método sobrecargado tenga diferente signatura. Por lo tanto, los métodos sobrecargados realizan la “misma acción”, pero teniendo en cuenta:
+•	Diferentes cantidades de parámetros.
+void método(int paramétro1, int paramétro2, int paramétro3)
+void método(int paramétro1, int paramétro2)
+•	 Diferentes tipos de parámetros.
+void método(int paramétro1, int paramétro2, int paramétro3)
+void método(double paramétro1, double paramétro2, double paramétro3)
+•	Diferente orden de parámetros.
+void método(int paramétro1, double paramétro2, float paramétro3)
+void método(float paramétro1, double paramétro2, int paramétro3)
+•	Diferente valor de retorno.
+void método(int paramétro1, double paramétro2, float paramétro3)
+String método(int paramétro1, double paramétro2, float paramétro3)
+
+Actividad: Realizar un programa en Java que permita calcular el pedido que realiza un cliente en un restaurante
+
+Los pedidos de un restaurante están conformados por las siguientes 
+partes:
+•	Un primer plato.
+•	Un segundo plato.
+•	Una bebida.
+•	Un postre.
+Cada uno de dichas partes tiene un nombre y un valor. Se requiere 
+definir métodos sobrecargados para calcular el valor del pedido dependiendo si el cliente solicita:
+•	Un primer plato y una bebida.
+•	Un primer plato, un segundo plato y una bebida.
+•	 Un primer plato, un segundo plato, una bebida y un postre.
+Implementar un método main que utilice los tres métodos sobrecargados en tres diferentes pedidos:
+Solución:
+public class Pedido {
+
+public void calcularPedido(String primerPlato, double costoPrimer Plato, String bebida, double costoBebida) { double total = costoPrimerPlato + costoBebida; System.out.println(“El costo de “ + primerPlato + “ y “ + bebida + “ es = $” + total); }
+
+public void calcularPedido(String primerPlato, double 
+costoPrimerPlato, String segundoPlato, double 
+costoSegundoPlato, String bebida, double costoBebida) {
+double total = costoPrimerPlato + costoSegundoPlato + 
+costoBebida;
+System.out.println(“El costo de “ + primerPlato + “ + “ + 
+segundoPlato + “ + “ + bebida + “ es = $” + total);
+}
+
+public void calcularPedido(String primerPlato, double 
+costoPrimerPlato, String segundoPlato, double 
+costoSegundoPlato, String bebida, double costoBebida) {
+double total = costoPrimerPlato + costoSegundoPlato + 
+costoBebida;
+System.out.println(“El costo de “ + primerPlato + “ + “ + 
+segundoPlato + “ + “ + bebida + “ es = $” + total);
+}
+
+public void calcularPedido(String primerPlato, double 
+costoPrimerPlato, String segundoPlato, double 
+costoSegundoPlato, String postre, double costoPostre, String 
+bebida, double costoBebida) {
+double total = costoPrimerPlato + costoSegundoPlato + 
+costoBebida + costoPostre;
+
+System.out.println(“El costo de “ + primerPlato + “ + “ + 
+segundoPlato + “ + “ + bebida + “ + “ +
+postre + “ es = $” + total);
+}
+/**
+* Método main que crea tres diferentes tipos de pedidos en el  
+* restaurante.
+*/
+public static void main (String args[]) {
+Pedido pedido1 = new Pedido();
+pedido1.calcularPedido(“Sancocho”, 5000, “Gaseosa”, 2000);
+Pedido pedido2 = new Pedido();
+pedido2.calcularPedido(“Crema de verduras”, 5000, 
+“Churrasco”, 6000, “Gaseosa”, 2000);
+Pedido pedido3 = new Pedido();
+pedido3.calcularPedido(“Crema de espinacas”, 
+5000,”Salmón”,10000,”Tiramisú”,5000,“Gaseosa”,2000);
+}
+}
+
+
+Ejercicio  Sobrecarga de constructores
+A veces es necesario inicializar un objeto de diferentes formas. Para ello, se realiza la sobrecarga de constructores. Los constructores sobrecargados deben tener diferente número o tipo de parámetros. Cada constructor realiza una tarea diferente.
+Se puede utilizar la palabra reservada this para llamar a un constructor desde otro. La llamada this debe ser la primera línea de dicho constructor.
+
+Actividad: 
+Realizar un programa en Java que permita modelar un artículo científico. 
+Los artículos científicos contienen los siguientes metadatos: nombre del artículo, autor, palabras claves, nombre de la publicación, año y resumen.
+Se deben definir tres constructores sobrecargados:
+•	El primero inicializa un artículo científico con solo su título y autor.
+•	El segundo constructor, un artículo científico con su nombre, autor, palabras claves, nombre de la publicación y año. Debe invocar al primer constructor.
+•	El tercer constructor, un artículo científico con su nombre, autor, palabras claves, nombre de la publicación, año y resumen. Debe invocar al segundo constructor.
+Se requiere un método que imprima los atributos de un artículo en pantalla. Realizar un método main que utilice el tercer constructor para instanciar un artículo científico e imprima los valores de sus atributos en pantalla.
+Solución:
+public class ArtículoCientífico {
+String título; 
+String autor; 
+String[] palabrasClaves = new String[3];
+String publicación; 
+int año; 
+String resumen;
+
+public ArtículoCientífico(String título, String autor) {
+this.título = título;
+this.autor = autor;
+}
+
+public ArtículoCientífico(String título, String autor, String[] palabras
+Claves, String publicación, int año) {
+this(título, autor); 
+this.palabrasClaves = palabrasClaves;
+this.publicación = publicación;
+this.año = año;
+}
+public ArtículoCientífico(String título, String autor, String[] palabras
+Claves, String publicación, int año, String resumen) {
+this(título, autor, palabrasClaves, publicación, año); /* Invoca al 
+constructor sobrecargado */
+this.resumen = resumen;
+}
+
+
+
+
+public void imprimir() {
+System.out.println(“Título del artículo = “ + título);
+System.out.println(“Autor del artículo = “ + autor);
+System.out.println(“Palabras clave = “);
+// Recorre el array para imprimir cada palabra clave
+for (int i = 0; i < palabrasClaves.length; i++) {
+System.out.println(palabrasClaves[i]);
+}
+System.out.println(“Publicación = “ + publicación);
+System.out.println(“Año = “ + año);
+System.out.println(“Resumen = “ + resumen);
+}
+
+public static void main (String args[]) {
+String[] palabras = {“Física”,”Espacio”,”Tiempo”};
+ArtículoCientífico artículo = new ArtículoCientífico(“La teoría es
+pecial de la relatividad”, “Albert Einstein”,palabras, “Anales de 
+Física”, 1913, “Las leyes de la física son las mismas en todos 
+los sistemas de referencia inerciales.”);
+artículo.imprimir();
+}
+}
+
+
+Ejercicio. Herencia
+En la programación orientada a objetos, un concepto muy importante y ampliamente utilizado es la herencia. En Java es posible heredar atributos y métodos de una clase a otra.
+Cuando se diseña un programa con herencia, se coloca código común en una clase y, luego, se determina a otras clases más específicas que la clase común es su superclase. Cuando una clase hereda de otra, la subclase hereda de la superclase y, consecuentemente, sus atributos y métodos.
+Hay dos conceptos importantes cuando una clase hereda de otra clase 
+•	Subclase (clase hija): la clase que hereda de otra clase.
+•	Superclase (clase padre): la clase de la que se hereda.
+Para heredar de una clase se utiliza la palabra clave extends, con el siguiente formato:
+class ClaseHija extends ClasePadre
+Los atributos y métodos heredados se pueden utilizar tal como están, reemplazarlos o complementarlos con nuevos atributos y métodos.
+Es posible declarar nuevos atributos y métodos en la subclase que no están en la superclase. Se puede reescribir el constructor en la subclase, el cual invoca al constructor de la superclase, ya sea implícitamente o usando la palabra clave super.
+Actividad: clase con herencia
+Desarrollar un programa que modele una cuenta bancaria que tiene los siguientes atributos, que deben ser de acceso protegido:
+•	Saldo, de tipo float.
+•	Número de consignaciones con valor inicial cero, de tipo int.
+•	Número de retiros con valor inicial cero, de tipo int.
+•	Tasa anual (porcentaje), de tipo float.
+•	Comisión mensual con valor inicial cero, de tipo float.
+La clase Cuenta tiene un constructor que inicializa los atributos saldo y tasa anual con valores pasados como parámetros. La clase Cuenta tiene los siguientes métodos:
+•	Consignar una cantidad de dinero en la cuenta actualizando su saldo.
+•	Retirar una cantidad de dinero en la cuenta actualizando su saldo.  El valor a retirar no debe superar el saldo.
+•	Calcular el interés mensual de la cuenta y actualiza el saldo correspondiente.
+•	Extracto mensual: actualiza el saldo restándole la comisión mensual y calculando el interés mensual correspondiente (invoca el método anterior). 
+•	Imprimir: muestra en pantalla los valores de los atributos.
+La clase Cuenta tiene dos clases hijas:
+•	Cuenta de ahorros: posee un atributo para determinar si la cuenta de ahorros está activa (tipo boolean). Si el saldo es menor a $10 000, la cuenta está inactiva, en caso contrario se considera activa. Los siguientes métodos se redefinen:
+o	Consignar: se puede consignar dinero si la cuenta está activa. Debe invocar al método heredado.
+o	Retirar: es posible retirar dinero si la cuenta está activa. Debe invocar al método heredado.
+o	Extracto mensual: si el número de retiros es mayor que 4, por cada retiro adicional, se cobra $1000 como comisión mensual. Al generar el extracto, se determina si la cuenta está activa o no con el saldo.
+o	Un nuevo método imprimir que muestra en pantalla el saldo de la cuenta, la comisión mensual y el número de transacciones realizadas (suma de cantidad de consignaciones y retiros).
+•	Cuenta corriente: posee un atributo de sobregiro, el cual se inicializa en cero. Se redefinen los siguientes métodos:
+o	Retirar: se retira dinero de la cuenta actualizando su saldo. Se puede retirar dinero superior al saldo. El dinero que se debe queda como sobregiro.
+o	Consignar: invoca al método heredado. Si hay sobregiro, la cantidad consignada reduce el sobregiro.
+o	Extracto mensual: invoca al método heredado.
+o	Un nuevo método imprimir que muestra en pantalla el saldo de la cuenta, la comisión mensual, el número de transacciones realizadas (suma de cantidad de consignaciones y retiros) y el valor de sobregiro.
+Realizar un método main que implemente un objeto Cuenta de ahorros y llame a los métodos correspondientes.
+Clase: Cuenta
+public class Cuenta {
+protected float saldo;
+protected int númeroConsignaciones = 0;
+protected int númeroRetiros = 0;
+protected float tasaAnual;
+protected float comisiónMensual = 0;
+public Cuenta(float saldo, float tasaAnual) {
+this.saldo = saldo;
+this.tasaAnual = tasaAnual;
+}
+
+public void consignar(float cantidad) {
+saldo = saldo + cantidad; 
+númeroConsignaciones = númeroConsignaciones + 1;
+}
+
+public void retirar(float cantidad) {
+float nuevoSaldo = saldo - cantidad;
+if (nuevoSaldo >= 0) {
+saldo -= cantidad;
+númeroRetiros = númeroRetiros + 1;
+} else {
+System.out.println(“La cantida a retirar excede el saldo 
+actual.”);
+}
+}
+
+public void calcularInterés() {
+float tasaMensual = tasaAnual / 12; 
+float interesMensual = saldo * tasaMensual;
+saldo += interesMensual; 
+}
+public void extractoMensual() {
+saldo -= comisiónMensual;
+calcularInterés();
+}
+}
+
+
+Clase: CuentaAhorros
+
+public class CuentaAhorros extends Cuenta {
+private boolean activa;
+public CuentaAhorros(float saldo, float tasa) {
+super(saldo, tasa);
+if (saldo < 10000) 
+activa = false;
+else
+activa = true;
+}
+public void retirar(float cantidad) {
+if (activa) 
+super.retirar(cantidad); 
+}
+public void consignar(float cantidad) {
+if (activa)
+super.consignar(cantidad); 
+}
+public void extractoMensual() {
+if (númeroRetiros > 4) {
+comisiónMensual += (númeroRetiros - 4) * 1000;
+}
+super.extractoMensual(); 
+if ( saldo < 10000 )
+activa = false;
+}
+public void imprimir() {
+System.out.println(“Saldo = $ “ + saldo);
+System.out.println(“Comisión mensual =  $ “ + 
+comisiónMensual);
+System.out.println(“Número de transacciones = “ + 
+(númeroConsignaciones + númeroRetiros));
+System.out.println();
+}
+}
+
+Clase: CuentaCorriente
+public class CuentaCorriente extends Cuenta {
+float sobregiro;
+public CuentaCorriente(float saldo, float tasa) {
+super(saldo, tasa); 
+sobregiro = 0; 
+}
+public void retirar(float cantidad) {
+float resultado = saldo - cantidad; 
+if (resultado < 0) {
+sobregiro = sobregiro - resultado;
+saldo = 0;
+} else {
+super.retirar(cantidad); 
+}
+}
+public void consignar(float cantidad) {
+float residuo = sobregiro – cantidad;
+
+if (sobregiro > 0) {
+if ( residuo > 0) { 
+sobregiro = 0;
+saldo = residuo;
+} else { 
+sobregiro = -residuo;
+saldo = 0;
+}
+} else {
+super.consignar(cantidad); 
+
+}
+}
+public void extractoMensual() {
+super.extractoMensual(); 
+}
+public void imprimir() {
+System.out.println(“Saldo = $ “ + saldo);
+System.out.println(“Cargo mensual =  $ “ + comisiónMensual);
+System.out.println(“Número de transacciones = “ + 
+(númeroConsignaciones + númeroRetiros));
+System.out.println(“Valor de sogregiro = $” + 
+(númeroConsignaciones + númeroRetiros));
+System.out.println();
+}
+}
+
+
+Clase: PruebaCuenta
+import java.util.*;
+public class PruebaCuenta {
+public static void main(String args[]) {
+Scanner input = new Scanner(System.in);
+System.out.println(“Cuenta de ahorros”);
+System.out.println(“Ingrese saldo inicial= $”);
+float saldoInicialAhorros = input.nextFloat(); 
+System.out.print(“Ingrese tasa de interés= “);
+float tasaAhorros = input.nextFloat();
+CuentaAhorros cuenta1 = new 
+CuentaAhorros(saldoInicialAhorros, tasaAhorros);
+System.out.print(“Ingresar cantidad a consignar: $”);
+float cantidadDepositar = input.nextFloat();
+cuenta1.consignar(cantidadDepositar);
+System.out.print(“Ingresar cantidad a retirar: $”);
+float cantidadRetirar = input.nextFloat();
+cuenta1.retirar(cantidadRetirar);
+cuenta1.extractoMensual();
+cuenta1.imprimir();
+}
+}
+
+ 
+Ejercicio  Polimorfismo
+El polimorfismo es la capacidad de un objeto para adoptar muchas formas. El uso más común del polimorfismo ocurre cuando se utiliza una referencia a una clase padre para referirse a un objeto de una clase hija .
+La única forma posible de acceder a un objeto es a través de una variable de referencia. Una variable de referencia puede ser de un solo tipo. Una vez declarado, el tipo de una variable de referencia no cambia. La variable de referencia se puede reasignar a otros objetos siempre que no se declare final. El tipo de la variable de referencia determinará los métodos que se pueden invocar en el objeto.
+Una variable de referencia puede referirse a cualquier objeto de su tipo declarado o cualquier subtipo de su tipo declarado, es decir, que una variable de un cierto tipo puede cambiar su contenido en tiempo de ejecución, siempre y cuando su contenido real sea un objeto de la clase hija o descendiente del tipo de la variable declarada inicialmente
+Actividad: clase padre Profesor y clase hija ProfesorTitular
+¿Cuál es el resultado de la ejecución del siguiente programa?
+Clase: Profesor
+public class Profesor {
+protected void imprimir() { 
+System.out.println(“Es un profesor.”);
+} 
+}
+
+Clase: ProfesorTitular
+public class ProfesorTitular extends Profesor {
+protected void imprimir() {
+System.out.println(“Es un profesor titular.”);
+}
+}
+
+Clase: Prueba
+public class Prueba { 
+public static void main(String[] args)  { 
+Profesor profesor1 = new ProfesorTitular();
+profesor1.imprimir();
+}
+}
+ 
+
+

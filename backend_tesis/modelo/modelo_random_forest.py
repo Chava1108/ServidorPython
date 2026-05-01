@@ -42,7 +42,7 @@ def entrenar_modelo():
     features['uso_protected'] = df.groupby('usuario')['detalle'].apply(
         lambda x: x.str.contains('protected', case=False, na=False).sum()
     )
-
+ 
     # 5. Actividad de código (crear + modificar métodos y atributos)
     features['metodos_creados'] = acciones_pivot.get('creó_método', 0)
     features['atributos_creados'] = acciones_pivot.get('creó_atributo', 0)

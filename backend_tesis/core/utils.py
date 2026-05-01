@@ -1,9 +1,238 @@
 import javalang
 import os
 from django.conf import settings
-from .models import Clase, Atributos, Funciones, LogActividad, Proyecto, Herencia
+from .models import Clase, LogActividad, Proyecto
 import re
 from rest_framework.exceptions import ValidationError
+
+
+def analizar_archivo_clase(clase):
+    """
+    Analiza el archivo fuente de una clase y extrae atributos, funciones y padre.
+    Funciona para Java y C++. Retorna dict con:
+    {atributos: [...], funciones: [...], padre: str|None, errores: [...]}
+    """
+    resultado = {
+        'atributos': [],
+        'funciones': [],
+        'padre': None,
+        'errores': [],
+    }
+
+    if not clase.path_archivo:
+        return resultado
+
+    ruta = os.path.join(settings.BASE_DIR, clase.path_archivo)
+    if not os.path.exists(ruta):
+        resultado['errores'].append(f'Archivo no encontrado: {clase.path_archivo}')
+        return resultado
+
+    try:
+        with open(ruta, 'r', encoding='utf-8') as f:
+            contenido = f.read()
+    except Exception as e:
+        resultado['errores'].append(str(e))
+        return resultado
+
+    lenguaje = clase.id_proyecto.lenguaje if clase.id_proyecto else 'java'
+
+    if lenguaje == 'java':
+        return _analizar_java(contenido, resultado)
+    else:
+        return _analizar_cpp(contenido, resultado)
+
+
+def _analizar_java(contenido, resultado):
+    """Analiza código Java con javalang."""
+    try:
+        tree = javalang.parse.parse(contenido)
+        for path, node in tree.filter(javalang.tree.ClassDeclaration):
+            resultado['padre'] = node.extends.name if node.extends else None
+
+            for field in node.fields:
+                tipo = field.type.name
+                modifiers = list(field.modifiers) if field.modifiers else []
+                nivel = 'public' if 'public' in modifiers else ('protected' if 'protected' in modifiers else 'private')
+                for declarator in field.declarators:
+                    resultado['atributos'].append({
+                        'nombre': declarator.name,
+                        'tipo': tipo,
+                        'nivel': nivel,
+                    })
+
+            for method in node.methods:
+                modifiers = list(method.modifiers) if method.modifiers else []
+                nivel = 'public' if 'public' in modifiers else ('protected' if 'protected' in modifiers else 'private')
+                retorno = method.return_type.name if method.return_type else 'void'
+                resultado['funciones'].append({
+                    'nombre': method.name,
+                    'tipo': retorno,
+                    'nivel': nivel,
+                })
+            break  # Solo la primera clase del archivo
+    except Exception as e:
+        resultado['errores'].append(str(e))
+        # Fallback con regex si javalang falla
+        _analizar_java_regex(contenido, resultado)
+
+    return resultado
+
+
+def _analizar_java_regex(contenido, resultado):
+    """Fallback regex-based Java parser."""
+    # Padre
+    m = re.search(r'class\s+\w+\s+extends\s+(\w+)', contenido)
+    if m:
+        resultado['padre'] = m.group(1)
+
+    # Atributos: líneas con tipo nombre; (no métodos)
+    for m in re.finditer(
+        r'^\s*(public|private|protected)\s+'
+        r'(?!(?:void|class|static\s+void|abstract)\b)'
+        r'(\w+)\s+(\w+)\s*[;=]',
+        contenido, re.MULTILINE
+    ):
+        resultado['atributos'].append({
+            'nivel': m.group(1),
+            'tipo': m.group(2),
+            'nombre': m.group(3),
+        })
+
+    # Funciones: líneas con tipo nombre(
+    for m in re.finditer(
+        r'^\s*(public|private|protected)\s+(\w+)\s+(\w+)\s*\(',
+        contenido, re.MULTILINE
+    ):
+        if m.group(3) not in [resultado.get('padre', ''), 'main']:
+            resultado['funciones'].append({
+                'nivel': m.group(1),
+                'tipo': m.group(2),
+                'nombre': m.group(3),
+            })
+
+
+def _analizar_cpp(contenido, resultado):
+    """Analiza código C++ con regex."""
+    # Padre: class Nombre : public Padre
+    m = re.search(r'class\s+\w+\s*:\s*(?:public|protected|private)\s+(\w+)', contenido)
+    if m:
+        resultado['padre'] = m.group(1)
+
+    # Encontrar el cuerpo de la clase
+    class_match = re.search(r'class\s+\w+[^{]*\{', contenido)
+    if not class_match:
+        return resultado
+
+    # Extraer contenido entre las llaves de la clase
+    inicio = class_match.end()
+    nivel_llaves = 1
+    i = inicio
+    while i < len(contenido) and nivel_llaves > 0:
+        if contenido[i] == '{':
+            nivel_llaves += 1
+        elif contenido[i] == '}':
+            nivel_llaves -= 1
+        i += 1
+    cuerpo_clase = contenido[inicio:i - 1]
+
+    # Determinar sección actual (public/private/protected)
+    seccion_actual = 'private'  # default en C++
+    lineas = cuerpo_clase.split('\n')
+
+    for linea in lineas:
+        stripped = linea.strip()
+
+        # Detectar cambio de sección
+        sec_match = re.match(r'^(public|private|protected)\s*:', stripped)
+        if sec_match:
+            seccion_actual = sec_match.group(1)
+            continue
+
+        # Ignorar comentarios, líneas vacías, constructores, destructores
+        if not stripped or stripped.startswith('//') or stripped.startswith('/*') or stripped.startswith('*'):
+            continue
+
+        # Ignorar constructores: NombreClase(...)
+        nombre_clase_match = re.search(r'class\s+(\w+)', contenido)
+        nombre_clase = nombre_clase_match.group(1) if nombre_clase_match else ''
+        if re.match(rf'^\s*{re.escape(nombre_clase)}\s*\(', stripped):
+            continue
+        if re.match(rf'^\s*~{re.escape(nombre_clase)}\s*\(', stripped):
+            continue
+
+        # Funciones: tipo nombre(...)
+        func_match = re.match(
+            r'(?:virtual\s+)?(\w+)\s+(\w+)\s*\([^)]*\)',
+            stripped
+        )
+        if func_match:
+            tipo = func_match.group(1)
+            nombre = func_match.group(2)
+            if nombre not in [nombre_clase, f'~{nombre_clase}', 'main']:
+                resultado['funciones'].append({
+                    'nombre': nombre,
+                    'tipo': tipo,
+                    'nivel': seccion_actual,
+                })
+            continue
+
+        # Atributos: tipo nombre;
+        attr_match = re.match(r'(\w+)\s+(\w+)\s*;', stripped)
+        if attr_match:
+            resultado['atributos'].append({
+                'nombre': attr_match.group(2),
+                'tipo': attr_match.group(1),
+                'nivel': seccion_actual,
+            })
+
+    return resultado
+
+
+def extraer_codigo_funcion_desde_archivo(ruta, nombre_funcion, tipo_retorno):
+    """Extrae el código de una función desde un archivo fuente."""
+    try:
+        if not ruta or not os.path.exists(ruta):
+            return ''
+        with open(ruta, 'r', encoding='utf-8') as archivo:
+            contenido = archivo.read()
+
+        nombre_limpio = (nombre_funcion or '').replace('()', '').strip()
+        tipo_limpio = (tipo_retorno or '').strip()
+
+        if not nombre_limpio:
+            return ''
+
+        patron = re.compile(
+            rf'(?:(?:public|protected|private|static|final|abstract|synchronized|native|virtual)\s+)*'
+            rf'(?:{re.escape(tipo_limpio)}\s+)?'
+            rf'{re.escape(nombre_limpio)}\s*\([^)]*\)\s*\{{',
+            re.MULTILINE
+        )
+        match = patron.search(contenido)
+        if not match:
+            patron_simple = re.compile(
+                rf'\b{re.escape(nombre_limpio)}\s*\([^)]*\)\s*\{{',
+                re.MULTILINE
+            )
+            match = patron_simple.search(contenido)
+
+        if not match:
+            return ''
+
+        inicio = match.start()
+        nivel_llaves = 0
+        i = match.end() - 1
+        while i < len(contenido):
+            if contenido[i] == '{':
+                nivel_llaves += 1
+            elif contenido[i] == '}':
+                nivel_llaves -= 1
+                if nivel_llaves == 0:
+                    return contenido[inicio:i + 1]
+            i += 1
+        return contenido[inicio:]
+    except Exception:
+        return ''
 
 def analizar_codigo_java(codigo_fuente):
     """
@@ -506,10 +735,16 @@ def actualizar_codigo_main(usuario_id, proyecto_id, nombre_clase, lenguaje):
         f.writelines(nuevo_contenido)
 
 def registrar_xapi(actor, verbo, objeto=""):
+    from .models import Usuario
     print(f"Entro a guardarLog actor: {actor}, verbo: {verbo}")
     try:
+        # No registrar actividad de administradores para evitar ruido en analytics
+        usuario_obj = Usuario.objects.filter(id=int(actor)).first()
+        if usuario_obj and usuario_obj.is_admin:
+            print("DEBUG: Log omitido (usuario es admin)")
+            return
         LogActividad.objects.create(
-            usuario=int(actor), # Aseguramos que se guarde como texto
+            usuario=int(actor),
             accion=verbo,
             detalle=objeto
         )
@@ -681,45 +916,213 @@ def eliminar_vinculo_main(usuario_id, proyecto_id, nombre_clase, lenguaje):
     with open(ruta_archivo, 'w', encoding='utf-8') as f:
         f.writelines(nuevas_lineas)
 
-def inyectar_elemento_en_codigo(ruta_archivo, nuevo_contenido, lenguaje, es_metodo=False):
+def inyectar_elemento_en_codigo(ruta_archivo, nuevo_contenido, lenguaje, es_metodo=False, nivel='public'):
     """
-    Inserta un atributo o método en el archivo físico sin alterar el resto del código.
-    Inserta ANTES del último cierre de la clase (} o };) para evitar desplazar código.
+    Inserta un atributo o método en el archivo fuente.
+    - Java: atributos antes del primer constructor/método, métodos antes del cierre.
+    - C++: busca la sección correspondiente (public:/private:/protected:) y coloca
+      atributos después de los existentes en esa sección, métodos al final de la sección.
+      Si la sección no existe, la crea antes del cierre de la clase.
     """
-    if not os.path.exists(ruta_archivo):
+    ruta_completa = os.path.join(settings.BASE_DIR, ruta_archivo) if ruta_archivo else None
+    if not ruta_completa or not os.path.exists(ruta_completa):
         return False
 
-    with open(ruta_archivo, 'r', encoding='utf-8') as f:
-        lineas = f.readlines()
+    with open(ruta_completa, 'r', encoding='utf-8') as f:
+        contenido = f.read()
 
-    # Evitar duplicados: Si el elemento ya existe, no hacemos nada
-    if any(nuevo_contenido.strip() in l.strip() for l in lineas):
+    # Evitar duplicados
+    if nuevo_contenido.strip() in contenido:
         return True
 
-    # Buscar la ÚLTIMA llave de cierre de la clase (} para Java, }; para C++)
-    indice_cierre = -1
-    for i in range(len(lineas) - 1, -1, -1):
-        linea_strip = lineas[i].strip()
-        if lenguaje == 'cpp' and linea_strip == '};':
-            indice_cierre = i
-            break
-        elif lenguaje != 'cpp' and linea_strip == '}':
-            indice_cierre = i
-            break
+    lineas = contenido.split('\n')
 
-    if indice_cierre == -1:
+    if lenguaje == 'cpp':
+        exito = _inyectar_cpp(lineas, nuevo_contenido, es_metodo, nivel)
+    else:
+        exito = _inyectar_java(lineas, nuevo_contenido, es_metodo)
+
+    if not exito:
         return False
 
-    # Construir la línea a insertar con indentación correcta
-    if es_metodo:
-        linea_nueva = f"\n    {nuevo_contenido}\n\n"
-    else:
-        linea_nueva = f"    {nuevo_contenido}\n"
+    with open(ruta_completa, 'w', encoding='utf-8') as f:
+        f.write('\n'.join(lineas))
 
-    # Insertar ANTES de la llave de cierre
-    lineas.insert(indice_cierre, linea_nueva)
-
-    with open(ruta_archivo, 'w', encoding='utf-8') as f:
-        f.writelines(lineas)
-    
     return True
+
+
+def _inyectar_java(lineas, nuevo_contenido, es_metodo):
+    """Inyecta en archivo Java."""
+    if es_metodo:
+        indice = _encontrar_cierre_clase(lineas, 'java')
+        if indice == -1:
+            return False
+        lineas.insert(indice, '')
+        lineas.insert(indice + 1, f"    {nuevo_contenido}")
+    else:
+        indice = _encontrar_zona_atributos_java(lineas)
+        if indice == -1:
+            indice = _encontrar_cierre_clase(lineas, 'java')
+            if indice == -1:
+                return False
+        lineas.insert(indice, f"    {nuevo_contenido}")
+    return True
+
+
+def _inyectar_cpp(lineas, nuevo_contenido, es_metodo, nivel):
+    """
+    Inyecta en archivo C++.
+    Busca la sección correspondiente (public:/private:/protected:) y coloca
+    el elemento en la posición correcta dentro de esa sección.
+    """
+    seccion_label = f"{nivel}:"
+
+    # Buscar inicio de la clase
+    inicio_clase = -1
+    for i, linea in enumerate(lineas):
+        if re.match(r'^\s*class\s+\w+', linea.strip()):
+            inicio_clase = i
+            break
+    if inicio_clase == -1:
+        return False
+
+    # Buscar llave de apertura de la clase
+    inicio_cuerpo = -1
+    for i in range(inicio_clase, len(lineas)):
+        if '{' in lineas[i]:
+            inicio_cuerpo = i + 1
+            break
+    if inicio_cuerpo == -1:
+        return False
+
+    cierre_clase = _encontrar_cierre_clase(lineas, 'cpp')
+    if cierre_clase == -1:
+        return False
+
+    # Buscar la sección correspondiente (e.g. "public:")
+    seccion_inicio = -1
+    for i in range(inicio_cuerpo, cierre_clase):
+        if lineas[i].strip() == seccion_label:
+            seccion_inicio = i
+            break
+
+    if seccion_inicio == -1:
+        # La sección no existe: crearla al INICIO del cuerpo de la clase (convención C++)
+        lineas.insert(inicio_cuerpo, f"{seccion_label}")
+        lineas.insert(inicio_cuerpo + 1, f"    {nuevo_contenido}")
+        return True
+
+    # Encontrar el fin de esta sección (siguiente sección o cierre de clase)
+    seccion_fin = cierre_clase
+    for i in range(seccion_inicio + 1, cierre_clase):
+        stripped = lineas[i].strip()
+        if re.match(r'^(public|private|protected)\s*:', stripped):
+            seccion_fin = i
+            break
+
+    if es_metodo:
+        # Métodos: insertar al final de la sección, antes de la siguiente sección o cierre
+        lineas.insert(seccion_fin, f"    {nuevo_contenido}")
+        lineas.insert(seccion_fin, '')
+    else:
+        # Atributos: insertar después del último atributo en esta sección,
+        # pero antes del primer constructor/método
+        ultimo_atributo = -1
+        primer_metodo = -1
+        nivel_llaves = 0
+
+        for i in range(seccion_inicio + 1, seccion_fin):
+            stripped = lineas[i].strip()
+
+            nivel_llaves += stripped.count('{') - stripped.count('}')
+            if nivel_llaves > 0:
+                continue
+
+            if not stripped or stripped.startswith('//') or stripped.startswith('/*') or stripped.startswith('*'):
+                continue
+
+            # Constructor o método: tiene paréntesis
+            if re.match(r'.*\w+\s*\(', stripped):
+                if primer_metodo == -1:
+                    primer_metodo = i
+                break
+
+            # Atributo: termina en ; sin paréntesis
+            if stripped.endswith(';') and '(' not in stripped:
+                ultimo_atributo = i
+
+        if ultimo_atributo != -1:
+            lineas.insert(ultimo_atributo + 1, f"    {nuevo_contenido}")
+        elif primer_metodo != -1:
+            lineas.insert(primer_metodo, f"    {nuevo_contenido}")
+        else:
+            # Sección vacía o solo comentarios
+            lineas.insert(seccion_inicio + 1, f"    {nuevo_contenido}")
+
+    return True
+
+
+def _encontrar_cierre_clase(lineas, lenguaje):
+    """Encuentra el índice de la última llave de cierre de la clase."""
+    cierre = '};' if lenguaje == 'cpp' else '}'
+    for i in range(len(lineas) - 1, -1, -1):
+        if lineas[i].strip() == cierre:
+            return i
+    return -1
+
+
+def _encontrar_zona_atributos_java(lineas):
+    """
+    Para Java: busca la posición después del último atributo,
+    o antes del primer constructor/método.
+    """
+    inicio_clase = -1
+    for i, linea in enumerate(lineas):
+        stripped = linea.strip()
+        if re.match(r'^(public\s+)?class\s+\w+', stripped):
+            inicio_clase = i
+            break
+
+    if inicio_clase == -1:
+        return -1
+
+    inicio_cuerpo = -1
+    for i in range(inicio_clase, len(lineas)):
+        if '{' in lineas[i]:
+            inicio_cuerpo = i + 1
+            break
+
+    if inicio_cuerpo == -1:
+        return -1
+
+    ultimo_atributo = -1
+    primer_metodo = -1
+    nivel_llaves = 0
+
+    for i in range(inicio_cuerpo, len(lineas)):
+        stripped = lineas[i].strip()
+
+        nivel_llaves += stripped.count('{') - stripped.count('}')
+
+        if nivel_llaves > 0 and '{' in stripped and ('}' not in stripped or stripped.count('{') > stripped.count('}')):
+            continue
+        if nivel_llaves > 0:
+            continue
+
+        if not stripped or stripped.startswith('//') or stripped.startswith('/*') or stripped.startswith('*'):
+            continue
+
+        # Constructor o método
+        if re.match(r'.*\w+\s*\(', stripped) and primer_metodo == -1:
+            primer_metodo = i
+            break
+
+        # Atributo
+        if stripped.endswith(';') and '(' not in stripped:
+            ultimo_atributo = i
+
+    if ultimo_atributo != -1:
+        return ultimo_atributo + 1
+    if primer_metodo != -1:
+        return primer_metodo
+    return inicio_cuerpo

@@ -18,23 +18,20 @@ urlpatterns = [
     path('clase/<int:id>', views.gestionar_clase_individual), # DELETE
 
     # --- ATRIBUTOS ---
-    # POST: crear, GET: lista
+    # POST: agregar (inyecta en archivo)
     path('atributos', views.gestionar_atributos),
-    # PUT: modificar, DELETE: eliminar
-    path('atributos/<int:id>', views.gestionar_atributo_individual),
 
     # --- FUNCIONES ---
-    # POST: crear, GET: lista
+    # POST: agregar (inyecta en archivo)
     path('funciones', views.gestionar_funciones),
-    # PUT: modificar, DELETE: eliminar
-    path('funciones/<int:id>', views.gestionar_funcion_individual),
+
     # --- HERENCIA ---
-    # GET: lista (por proyecto), DELETE: borrar hijo
-    path('herencia/<int:id>', views.gestionar_herencia_hijo),
-    # POST: crear
-    path('herencia', views.crear_herencia),
-    # DELETE: borrar padre
-    path('herenciaP/<int:id>', views.eliminar_herencia_padre),
+    # POST: agregar extends/herencia al archivo fuente
+    path('herencia', views.agregar_herencia),
+
+    # --- INFO COMPLETA DE CLASE (propios + heredados, desde archivos) ---
+    path('clase-info/<int:id_clase>', views.obtener_info_completa_clase),
+    path('clase-info/<int:id_clase>/codigo-funcion', views.obtener_codigo_funcion),
 
     # --- USUARIOS Y PROYECTOS ---
     # GET: lista, POST: crear
@@ -51,7 +48,9 @@ urlpatterns = [
     path('guardar-archivo', views.guardar_archivo_cambios),
     path('api/login/', views.login_view, name='login'),
     path('api/logout/', views.logout_view, name='logout'),
+    path('api/register/', views.register_view, name='register'),
     path('api/tooltip-log', views.registrar_tooltip),
+    path('api/dashboard-analytics', views.dashboard_analytics),
 
     # --- EXÁMENES ---
     path('examenes/crear', views.crear_examen),

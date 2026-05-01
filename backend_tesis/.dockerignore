@@ -1,0 +1,12 @@
+# Ignorar en el build de Docker
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.git/
+.env
+*.sqlite3
+output.txt
+error.txt
+modelo/output.txt
+modelo/error.txt

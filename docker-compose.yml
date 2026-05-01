@@ -1,0 +1,49 @@
+# ============================================================
+# Docker Compose — POOGraph (Backend + Frontend + MySQL)
+# ============================================================
+version: '3.8'
+
+services:
+
+  # --- Base de Datos MySQL ---
+  db:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: clases
+    ports:
+      - "3307:3306"          # 3307 externo para no chocar con MySQL local
+    volumes:
+      - mysql_data:/var/lib/mysql
+
+  # --- Backend Django ---
+  backend:
+    build: ./backend_tesis
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend_tesis/codigos_fuente:/app/codigos_fuente   # Código de alumnos persistente
+      - ./backend_tesis/datos:/app/datos                     # Logs CSV persistentes
+    environment:
+      - DB_HOST=db
+      - DB_PORT=3306
+      - DB_NAME=clases
+      - DB_USER=root
+      - DB_PASSWORD=root
+      - ALLOWED_HOSTS=*
+    depends_on:
+      - db
+
+  # --- Frontend Angular (Nginx) ---
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    ports:
+      - "4200:80"
+    depends_on:
+      - backend
+
+volumes:
+  mysql_data:

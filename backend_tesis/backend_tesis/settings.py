@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
 from pathlib import Path
+import os
 # Truco para omitir la validación de versión de MariaDB
 # Parche de compatibilidad para MariaDB 10.4 y Django moderno
 from django.db.backends.base.base import BaseDatabaseWrapper
@@ -36,7 +37,7 @@ SECRET_KEY = 'django-insecure-7bbw8u%dxh@khbyl21$o1p2k^^&6_c3z_8lbo8-x$pfh000gu2
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', '').split(',') if os.environ.get('ALLOWED_HOSTS') else []
 
 
 # Application definition
@@ -67,6 +68,7 @@ MIDDLEWARE = [
 
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:4200",
+    "http://frontend:80",
 ]
 
 ROOT_URLCONF = 'backend_tesis.urls'
@@ -95,11 +97,11 @@ WSGI_APPLICATION = 'backend_tesis.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
-        'NAME': 'clases',      # El nombre de tu BD actual
-        'USER': 'root',        # Tu usuario de MySQL
-        'PASSWORD': '',        # Tu contraseña (si no tienes, déjalo vacío)
-        'HOST': 'localhost',
-        'PORT': '3306',
+        'NAME': os.environ.get('DB_NAME', 'clases'),
+        'USER': os.environ.get('DB_USER', 'root'),
+        'PASSWORD': os.environ.get('DB_PASSWORD', ''),
+        'HOST': os.environ.get('DB_HOST', 'localhost'),
+        'PORT': os.environ.get('DB_PORT', '3306'),
         'OPTIONS': {
             'init_command': "SET sql_mode='STRICT_TRANS_TABLES'",
         },
@@ -131,7 +133,7 @@ AUTH_PASSWORD_VALIDATORS = [
 
 LANGUAGE_CODE = 'en-us'
 
-TIME_ZONE = 'UTC'
+TIME_ZONE = 'America/Mexico_City'
 
 USE_I18N = True
 
