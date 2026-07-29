@@ -38,4 +38,4 @@ RUN mkdir -p codigos_fuente datos archivos
 EXPOSE 8000
 
 # Comando de inicio para producción usando Gunicorn y leyendo el puerto dinámico de Railway
-CMD ["sh", "-c", "gunicorn tesis.wsgi:application --bind 0.0.0.0:${PORT:-8000} --workers 3"]
+CMD ["sh", "-c", "gunicorn backend_tesis.wsgi:application --bind 0.0.0.0:${PORT:-8000} --workers 3"]
