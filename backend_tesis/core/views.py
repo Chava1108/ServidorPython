@@ -473,12 +473,17 @@ def gestionar_clase_individual(request, id):
     if request.method == 'GET':
         serializer = ClaseSerializer(clase)
         return Response(serializer.data)
+        
     elif request.method == 'DELETE':
         try:
             proyecto_instancia = Proyecto.objects.get(pk=clase.id_proyecto_id)
             eliminar_vinculo_main(clase.id, clase.id_proyecto_id, clase.nombre, proyecto_instancia.lenguaje)
 
-            # --- BORRAR ARCHIVO FÍSICO ---
+            Atributos.objects.filter(id_clase=clase.id).delete()
+            Funciones.objects.filter(id_clase=clase.id).delete()
+
+            print(f"Elementos dependientes de la clase {clase} eliminados.")
+            # 3. --- BORRAR ARCHIVO FÍSICO ---
             if clase.path_archivo:
                 full_path = os.path.join(settings.BASE_DIR, clase.path_archivo)
                 if os.path.exists(full_path):
@@ -486,11 +491,9 @@ def gestionar_clase_individual(request, id):
                         os.remove(full_path)
                     except Exception as e:
                         print(f"No se pudo borrar el archivo físico: {e}")
-
-            # --- BORRAR LA CLASE ---
             clase.delete()
             
-            return Response({"msg": "Clase eliminada correctamente"})
+            return Response({"msg": "Clase y sus elementos dependientes eliminados correctamente"})
             
         except Exception as e:
             return Response({"error": str(e)}, status=500)
