@@ -1,5 +1,5 @@
 # ============================================================
-# Dockerfile — Backend Django (POOGraph)
+# Dockerfile — Backend Django (POOGraph - Producción / Railway)
 # ============================================================
 # Imagen base con Python 3.11 + herramientas de compilación
 FROM python:3.11-slim
@@ -7,13 +7,13 @@ FROM python:3.11-slim
 # Evitar prompts interactivos y configurar encoding
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    LANG=C.UTF-8
+    LANG=C.UTF-8 \
+    PORT=8000
 
-
-#   - default-libmysqlclient-dev: para mysqlclient (conector MySQL)
-#   - default-jdk: Java (compilación de código del alumno)
-#   - g++: C++ (compilación de código del alumno)
-#   - pkg-config: requerido por mysqlclient
+# Paquetes del sistema necesarios:
+#   - default-libmysqlclient-dev / pkg-config: para mysqlclient
+#   - default-jdk: Java (compilación de código de alumnos)
+#   - g++: C++ (compilación de código de alumnos)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     default-libmysqlclient-dev \
     default-jdk \
@@ -31,12 +31,11 @@ RUN pip install --no-cache-dir -r requirements-docker.txt
 # Copiar el código fuente del proyecto
 COPY . .
 
-# Crear carpetas necesarias si no existen
+# Crear carpetas necesarias para la persistencia de datos
 RUN mkdir -p codigos_fuente datos archivos
 
-# Puerto del servidor Django
+# Expone el puerto por defecto (Railway usará la variable $PORT)
 EXPOSE 8000
 
-# Comando de inicio: runserver para desarrollo
-# En producción cambiar por gunicorn
-CMD ["python", "manage.py", "runserver", "0.0.0.0:8000"]
+# Comando de inicio para producción usando Gunicorn y leyendo el puerto dinámico de Railway
+CMD ["sh", "-c", "gunicorn tesis.wsgi:application --bind 0.0.0.0:${PORT:-8000} --workers 3"]
