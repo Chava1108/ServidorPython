@@ -32,10 +32,13 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Crear carpetas necesarias para la persistencia de datos
-RUN mkdir -p codigos_fuente datos archivos
+RUN mkdir -p codigos_fuente datos archivos staticfiles
+
+# Recolectar archivos estáticos durante el build
+RUN python manage.py collectstatic --noinput
 
 # Expone el puerto por defecto (Railway usará la variable $PORT)
 EXPOSE 8000
 
-# Comando de inicio para producción usando Gunicorn y leyendo el puerto dinámico de Railway
-CMD ["sh", "-c", "gunicorn backend_tesis.wsgi:application --bind 0.0.0.0:${PORT:-8000} --workers 3"]
+# Comando de inicio: migrar DB y ejecutar gunicorn
+CMD ["sh", "-c", "python manage.py migrate && gunicorn backend_tesis.wsgi:application --bind 0.0.0.0:${PORT:-8000} --workers 2"]
