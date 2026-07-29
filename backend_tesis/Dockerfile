@@ -9,7 +9,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     LANG=C.UTF-8
 
-# Instalar dependencias del sistema:
+
 #   - default-libmysqlclient-dev: para mysqlclient (conector MySQL)
 #   - default-jdk: Java (compilación de código del alumno)
 #   - g++: C++ (compilación de código del alumno)
