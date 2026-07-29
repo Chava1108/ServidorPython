@@ -25,8 +25,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # Copiar e instalar dependencias de Python primero (cache de capas)
-COPY requirements-docker.txt .
-RUN pip install --no-cache-dir -r requirements-docker.txt
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Copiar el código fuente del proyecto
 COPY . .
