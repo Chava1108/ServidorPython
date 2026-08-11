@@ -1,0 +1,14 @@
+# Ignorar en git
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.env
+*.sqlite3
+output.txt
+error.txt
+modelo/output.txt
+modelo/error.txt
+*.log
+.DS_Store
+Dockerfile.bak

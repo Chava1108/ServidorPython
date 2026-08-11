@@ -4,11 +4,7 @@ public class Test extends ProfesorTitular {
     // --- Constructores ---
     public Test() {
     }
-
-    public Test() {
-    }
-
-
+    
     public float test2() {
     }
 }

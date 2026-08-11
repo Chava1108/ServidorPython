@@ -514,10 +514,10 @@ def obtener_codigo_clase(request, id):
             
         # 3. Construimos la ruta absoluta
         ruta_absoluta = os.path.join(settings.BASE_DIR, clase.path_archivo)
-        
+        print(f"Ruta absoluta del archivo: {ruta_absoluta}")
         # 4. Verificamos que el archivo exista físicamente
         if not os.path.exists(ruta_absoluta):
-            return Response({"error": "El archivo físico no se encuentra en el servidor."}, status=404)
+            return Response({"error": f"El archivo físico no se encuentra en el servidor: {ruta_absoluta}"}, status=404)
             
         # 5. Leemos el contenido
         with open(ruta_absoluta, 'r', encoding='utf-8') as archivo:

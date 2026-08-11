@@ -1,6 +1,8 @@
 from rest_framework import serializers
 from .models import * 
 from .utils import obtener_padre_desde_codigo
+from django.conf import settings
+import os
 
 class ClaseSerializer(serializers.ModelSerializer):
     # ESTA ES LA LÍNEA QUE FALTA:
@@ -12,8 +14,10 @@ class ClaseSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
     def get_nombre_padre(self, obj):
-        print("test ARCHIVOS", obj)
-        ruta = f"D:\\Respaldo\\Documents\\UAA\\POOGRAPH\\backend_tesis\\{obj.path_archivo}"
+        if not obj.path_archivo:
+            return None
+        # Usar settings.BASE_DIR para compatibilidad con cualquier servidor
+        ruta = os.path.join(settings.BASE_DIR, obj.path_archivo)
         lenguaje = obj.id_proyecto.lenguaje 
         
         # Llamamos a tu función de extracción

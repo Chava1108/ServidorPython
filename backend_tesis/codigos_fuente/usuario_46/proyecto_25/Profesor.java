@@ -1,6 +1,6 @@
 public class Profesor {
     protected String nombre;
-    protected String departamento;
+    private String departamento;
     protected int horasClase;
 
     public Profesor(String nombre, String departamento, int horasClase) {

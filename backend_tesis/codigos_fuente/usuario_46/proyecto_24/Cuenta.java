@@ -26,4 +26,5 @@ public class Cuenta {
     public String getInfo() {
         return "Cuenta: " + numeroCuenta + " | Titular: " + titular + " | Saldo: $" + saldo;
     }
+
 }
