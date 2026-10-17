@@ -23,13 +23,35 @@ DatabaseFeatures.can_return_rows_from_bulk_insert = False
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+
+def _cargar_env(ruta):
+    """Carga variables de un archivo .env (CLAVE=valor) sin sobrescribir las del sistema.
+    Solo se usa en desarrollo local: el .env no se versiona ni se despliega."""
+    if not os.path.isfile(ruta):
+        return
+    with open(ruta, encoding='utf-8') as f:
+        for linea in f:
+            linea = linea.strip()
+            if not linea or linea.startswith('#') or '=' not in linea:
+                continue
+            clave, valor = linea.split('=', 1)
+            os.environ.setdefault(clave.strip(), valor.strip().strip('"').strip("'"))
+
+
+_cargar_env(os.path.join(BASE_DIR, '.env'))
+
+
+def _env_bool(nombre, defecto):
+    return os.environ.get(nombre, str(defecto)).strip().lower() in ('1', 'true', 'yes', 'si')
+
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = os.environ.get('SECRET_KEY', 'django-insecure-change-me-in-production')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = os.environ.get('DEBUG', 'False') == 'True'
+DEBUG = _env_bool('DEBUG', False)
 
-ALLOWED_HOSTS = os.environ.get('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
+# Por defecto '*': el servidor de producción se accede por IP y no define esta variable
+ALLOWED_HOSTS = [h.strip() for h in os.environ.get('ALLOWED_HOSTS', '*').split(',') if h.strip()]
 
 # Railway asigna automáticamente RAILWAY_PUBLIC_DOMAIN
 if railway_domain := os.environ.get('RAILWAY_PUBLIC_DOMAIN'):
@@ -135,7 +157,9 @@ STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # CORS Configuration
-CORS_ALLOW_ALL_ORIGINS = False
+# En producción Nginx sirve frontend y API desde el mismo origen; se permite cualquier origen
+# por defecto para no romper el acceso por IP. Puede restringirse con CORS_ALLOW_ALL_ORIGINS=False.
+CORS_ALLOW_ALL_ORIGINS = _env_bool('CORS_ALLOW_ALL_ORIGINS', True)
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:4200",
     "http://frontend:80",
@@ -159,10 +183,13 @@ REST_FRAMEWORK = {
 }
 
 # Security Settings for Production
+# USE_HTTPS=True solo cuando el servidor tenga certificado TLS; con HTTP (situación actual)
+# la redirección a HTTPS deja el sitio inaccesible.
+USE_HTTPS = _env_bool('USE_HTTPS', False)
 if not DEBUG:
-    SECURE_SSL_REDIRECT = True
-    SESSION_COOKIE_SECURE = True
-    CSRF_COOKIE_SECURE = True
+    SECURE_SSL_REDIRECT = USE_HTTPS
+    SESSION_COOKIE_SECURE = USE_HTTPS
+    CSRF_COOKIE_SECURE = USE_HTTPS
     SECURE_BROWSER_XSS_FILTER = True
     SECURE_CONTENT_SECURITY_POLICY = {
         "default-src": ("'self'",),

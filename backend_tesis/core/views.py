@@ -16,6 +16,7 @@ from django.utils import timezone
 from django.db import transaction
 from datetime import timedelta
 import re
+from django.views.decorators.csrf import csrf_exempt
 
 # --- REGISTRO DE USUARIO ---
 @api_view(['POST'])
@@ -100,7 +101,7 @@ def gestionar_atributos(request):
         registrar_xapi(
             proyecto.id_usr.id,
             "agregó_atributo",
-            f"Atributo '{nombre}' ({tipo}) a la clase '{clase_obj.nombre}'"
+            f"Atributo '{nombre}' ({tipo}, {nivel}) a la clase '{clase_obj.nombre}'"
         )
         # En C++ el snippet NO lleva modificador de acceso (va bajo la sección public:/private:)
         # En Java SÍ lleva el modificador por línea
@@ -146,7 +147,7 @@ def gestionar_funciones(request):
         registrar_xapi(
             proyecto.id_usr.id,
             "agregó_función",
-            f"Funcion '{nombre_nuevo}' ({tipo}) a la clase '{clase_obj.nombre}'"
+            f"Funcion '{nombre_nuevo}' ({tipo}, {nivel}) a la clase '{clase_obj.nombre}'"
         )
 
         ruta_archivo = clase_obj.path_archivo
@@ -177,6 +178,26 @@ def gestionar_funciones(request):
 
 
 # --- HERENCIA ---
+def _asegurar_include_cpp(contenido, nombre_padre):
+    """
+    Agrega '#include "Padre.cpp"' al archivo de la clase hija si no lo tiene.
+    Sin él, la compilación depende del orden en que Main incluye las clases:
+    si el hijo se incluye antes que el padre, el compilador no conoce al padre.
+    """
+    linea = f'#include "{nombre_padre}.cpp"'
+    if re.search(r'^[ \t]*' + re.escape(linea), contenido, re.MULTILINE):
+        return contenido
+    # Antes de 'using namespace std;'; si no existe, después del último #include
+    ancla = re.search(r'^[ \t]*using\s+namespace\s+std\s*;', contenido, re.MULTILINE)
+    if ancla:
+        return contenido[:ancla.start()] + linea + '\n' + contenido[ancla.start():]
+    includes = list(re.finditer(r'^[ \t]*#include.*$', contenido, re.MULTILINE))
+    if includes:
+        fin = includes[-1].end()
+        return contenido[:fin] + '\n' + linea + contenido[fin:]
+    return linea + '\n' + contenido
+
+
 @api_view(['POST'])
 def agregar_herencia(request):
     """
@@ -193,6 +214,10 @@ def agregar_herencia(request):
     try:
         clase_hija = Clase.objects.get(pk=id_clase_hija)
         proyecto = clase_hija.id_proyecto
+        if nombre_padre == clase_hija.nombre:
+            return Response({"error": "Una clase no puede heredar de sí misma"}, status=400)
+        if not Clase.objects.filter(nombre=nombre_padre, id_proyecto=proyecto).exists():
+            return Response({"error": f"La clase padre '{nombre_padre}' no existe en el proyecto"}, status=404)
         ruta_completa = os.path.join(settings.BASE_DIR, clase_hija.path_archivo) if clase_hija.path_archivo else None
 
         if not ruta_completa or not os.path.exists(ruta_completa):
@@ -204,15 +229,20 @@ def agregar_herencia(request):
         if proyecto.lenguaje == 'cpp':
             # C++: class Hijo { → class Hijo : public Padre {
             patron = re.compile(r'(class\s+' + re.escape(clase_hija.nombre) + r')\s*(\{)')
-            ya_hereda = re.search(r'class\s+' + re.escape(clase_hija.nombre) + r'\s*:', contenido)
+            ya_hereda = re.search(r'class\s+' + re.escape(clase_hija.nombre) + r'\s*:\s*public\s+(\w+)', contenido)
             if ya_hereda:
-                # Ya hereda, reemplazar el padre
+                # Ya hereda, reemplazar el padre (y su #include)
+                padre_anterior = ya_hereda.group(1)
                 patron_existente = re.compile(
                     r'(class\s+' + re.escape(clase_hija.nombre) + r'\s*:\s*public\s+)\w+'
                 )
                 contenido = patron_existente.sub(r'\g<1>' + nombre_padre, contenido)
+                if padre_anterior != nombre_padre:
+                    contenido = re.sub(r'^[ \t]*#include\s+"' + re.escape(padre_anterior) + r'\.cpp"[ \t]*\r?\n?',
+                                       '', contenido, flags=re.MULTILINE)
             else:
                 contenido = patron.sub(r'\1 : public ' + nombre_padre + r' \2', contenido)
+            contenido = _asegurar_include_cpp(contenido, nombre_padre)
         else:
             # Java: public class Hijo { → public class Hijo extends Padre {
             patron = re.compile(r'((?:public\s+)?class\s+' + re.escape(clase_hija.nombre) + r')\s*(\{)')
@@ -648,16 +678,20 @@ def guardar_archivo_cambios(request):
     ruta_relativa = request.data.get('ruta_relativa')
     nuevo_codigo = request.data.get('codigo')
     id_proyecto = request.data.get('id_proyecto')
+    # manual | ejecutar | cambio_archivo | inactividad (el frontend anterior no lo envía)
+    origen = request.data.get('origen', 'manual')
+    if origen not in ('manual', 'ejecutar', 'cambio_archivo', 'inactividad'):
+        origen = 'manual'
     if not ruta_relativa or nuevo_codigo is None:
         return Response({"error": "Faltan datos"}, status=400)
-    
+
     try:
         proyecto = Proyecto.objects.get(pk=id_proyecto)
         ruta_absoluta = os.path.join(settings.BASE_DIR, ruta_relativa)
         registrar_xapi(
-            proyecto.id_usr.id if hasattr(proyecto.id_usr, 'id') else proyecto.id_usr, 
-            "guardó_código", 
-            f"Archivo: {ruta_relativa} (Proyecto: {proyecto.nombre})"
+            proyecto.id_usr.id if hasattr(proyecto.id_usr, 'id') else proyecto.id_usr,
+            "guardó_código",
+            f"Archivo: {ruta_relativa} (Proyecto: {proyecto.nombre}) | origen: {origen}"
         )
         # Escribimos el archivo (modo 'w' sobrescribe todo)
         with open(ruta_absoluta, 'w', encoding='utf-8') as f:
@@ -668,6 +702,8 @@ def guardar_archivo_cambios(request):
     except Exception as e:
         return Response({"error": str(e)}, status=500)
     
+# El login no debe exigir token CSRF (se ajustó así en el servidor de producción)
+@csrf_exempt
 @api_view(['POST'])
 def login_view(request):
     # 1. Obtener datos del JSON que envía Angular
@@ -744,9 +780,15 @@ def registrar_tooltip(request):
     if not id_usuario or not palabra:
         return Response({"error": "Faltan datos"}, status=400)
 
+    contexto = request.data.get('contexto', 'botón')
+
     if palabra == 'INTENTO_PEGAR':
         verbo = "intentó_pegar_código"
         detalle = f"Intento de pegar código en editor (Lenguaje: {lenguaje})"
+    elif palabra in ('MOSTRAR_DIAGRAMA', 'OCULTAR_DIAGRAMA'):
+        # Antes se guardaba como consultó_tooltip; ver analitica.normalizar para los registros viejos
+        verbo = "mostró_diagrama" if palabra == 'MOSTRAR_DIAGRAMA' else "ocultó_diagrama"
+        detalle = f"Diagrama {'visible' if palabra == 'MOSTRAR_DIAGRAMA' else 'oculto'} (Contexto: {contexto}, Lenguaje: {lenguaje})"
     else:
         verbo = "consultó_tooltip"
         detalle = f"Palabra: '{palabra}' (Lenguaje: {lenguaje})"
@@ -1014,104 +1056,92 @@ def resultados_examen_estudiante(request, id_intento):
 def dashboard_analytics(request):
     """
     Endpoint para el dashboard del admin.
-    Devuelve métricas agregadas del log de actividad.
-    Query params opcionales: ?usuario_id=X&dias=14
+    Devuelve métricas agregadas del log de actividad (cálculos en core/analitica.py).
+    Query params opcionales: ?usuario_id=X&dias=14&incluir_sinteticos=1
+    - Las fechas se agrupan en hora local (America/Mexico_City), no en UTC.
+    - Se excluyen los administradores y, salvo incluir_sinteticos=1, los usuarios
+      generados por simular_estudiantes.py.
     """
+    from collections import Counter, defaultdict
+    from . import analitica
+
     # Verificar que sea admin
     if not request.user.is_admin:
         return Response({"error": "Acceso denegado"}, status=403)
 
     usuario_id = request.query_params.get('usuario_id')
-    dias = int(request.query_params.get('dias', 14))
+    try:
+        dias = max(1, min(int(request.query_params.get('dias', 14)), 365))
+    except ValueError:
+        dias = 14
+    incluir_sinteticos = request.query_params.get('incluir_sinteticos') == '1'
     fecha_limite = timezone.now() - timedelta(days=dias)
 
-    # Base queryset
-    logs = LogActividad.objects.filter(fecha__gte=fecha_limite)
+    # Usuarios que no deben aparecer en las métricas
+    admins = {str(i) for i in Usuario.objects.filter(is_admin=True).values_list('id', flat=True)}
+    sinteticos = set(
+        LogActividad.objects.filter(accion__in=analitica.VERBOS_SIMULADOR)
+        .values_list('usuario', flat=True).distinct()
+    )
+    excluidos = admins if incluir_sinteticos else admins | sinteticos
+
+    logs = LogActividad.objects.filter(fecha__gte=fecha_limite).exclude(usuario__in=excluidos)
     if usuario_id:
         logs = logs.filter(usuario=str(usuario_id))
 
+    # Una sola consulta; verbos antiguos normalizados y fechas en hora local
+    eventos = [
+        (u, analitica.normalizar(a, d), d or '', timezone.localtime(f))
+        for u, a, d, f in logs.order_by('fecha').values_list('usuario', 'accion', 'detalle', 'fecha')
+    ]
+
+    def por_dia(items, clave_fecha, valor):
+        acumulado = defaultdict(float)
+        for item in items:
+            acumulado[clave_fecha(item).date().isoformat()] += valor(item)
+        return sorted(acumulado.items())
+
     # --- 1. Tiempo en sesión por día ---
-    from django.db.models import Min, Max
-    from django.db.models.functions import TruncDate
-    from collections import defaultdict
-    import datetime
+    sesiones = analitica.sesiones(eventos)
+    tiempo_sesion = [{"fecha": k, "minutos": round(v, 1)}
+                     for k, v in por_dia(sesiones, lambda s: s['inicio'], lambda s: s['minutos'])]
 
-    sesiones_por_dia = defaultdict(float)
-    # Agrupamos login/logout por usuario para calcular duración
-    usuarios_ids = logs.values_list('usuario', flat=True).distinct()
-
-    for uid in usuarios_ids:
-        user_logs = logs.filter(usuario=uid).order_by('fecha')
-        logins = user_logs.filter(accion='inició_sesión')
-        logouts = user_logs.filter(accion__in=['cerró_sesión_manual', 'cerró_sesión_inactividad', 'cerró_sesión'])
-
-        for login_ev in logins:
-            # Buscar el logout más cercano posterior
-            logout_ev = logouts.filter(fecha__gt=login_ev.fecha).first()
-            if logout_ev:
-                duracion_min = (logout_ev.fecha - login_ev.fecha).total_seconds() / 60.0
-                # Cap a 120 min por sesión para evitar outliers
-                duracion_min = min(duracion_min, 120)
-                dia = login_ev.fecha.date().isoformat()
-                sesiones_por_dia[dia] += duracion_min
-
-    tiempo_sesion = [{"fecha": k, "minutos": round(v, 1)} for k, v in sorted(sesiones_por_dia.items())]
-
-    # --- 2. Errores de compilación por día ---
-    errores_compilacion = []
-    compilaciones_error = logs.filter(
-        accion='compiló_proyecto',
-        detalle__icontains='error'
-    ).values_list('fecha', flat=True)
-    errores_por_dia = defaultdict(int)
-    for fecha in compilaciones_error:
-        errores_por_dia[fecha.date().isoformat()] += 1
-    errores_compilacion = [{"fecha": k, "cantidad": v} for k, v in sorted(errores_por_dia.items())]
-
-    # --- 3. Compilaciones exitosas por día ---
-    compilaciones_ok = logs.filter(
-        accion='compiló_proyecto',
-        detalle__icontains='exitosa'
-    ).values_list('fecha', flat=True)
-    ok_por_dia = defaultdict(int)
-    for fecha in compilaciones_ok:
-        ok_por_dia[fecha.date().isoformat()] += 1
-    exitos_compilacion = [{"fecha": k, "cantidad": v} for k, v in sorted(ok_por_dia.items())]
+    # --- 2 y 3. Compilaciones exitosas y con error por día ---
+    errores = [e for e in eventos if analitica.es_error(e[1])]
+    exitos = [e for e in eventos if analitica.es_compilacion_ok(e[1])]
+    errores_compilacion = [{"fecha": k, "cantidad": int(v)}
+                           for k, v in por_dia(errores, lambda e: e[3], lambda e: 1)]
+    exitos_compilacion = [{"fecha": k, "cantidad": int(v)}
+                          for k, v in por_dia(exitos, lambda e: e[3], lambda e: 1)]
 
     # --- 4. Tiempo viendo diagramas por día ---
-    diagrama_por_dia = defaultdict(float)
-    for uid in usuarios_ids:
-        user_logs = logs.filter(usuario=uid).order_by('fecha')
-        mostrar_evs = user_logs.filter(accion='MOSTRAR_DIAGRAMA')
-        ocultar_evs = user_logs.filter(accion='OCULTAR_DIAGRAMA')
-
-        for mostrar in mostrar_evs:
-            ocultar = ocultar_evs.filter(fecha__gt=mostrar.fecha).first()
-            if ocultar:
-                duracion_min = (ocultar.fecha - mostrar.fecha).total_seconds() / 60.0
-                duracion_min = min(duracion_min, 60)
-                dia = mostrar.fecha.date().isoformat()
-                diagrama_por_dia[dia] += duracion_min
-
-    tiempo_diagramas = [{"fecha": k, "minutos": round(v, 1)} for k, v in sorted(diagrama_por_dia.items())]
+    intervalos = analitica.intervalos_diagrama(eventos)
+    tiempo_diagramas = [{"fecha": k, "minutos": round(v, 1)}
+                        for k, v in por_dia(intervalos, lambda i: i['inicio'], lambda i: i['minutos'])]
 
     # --- 5. Resumen general ---
-    total_tooltips = logs.filter(accion='consultó_tooltip').count()
-    total_pegados = logs.filter(accion='intentó_pegar_código').count()
-    total_compilaciones = logs.filter(accion='compiló_proyecto').count()
-    total_errores = logs.filter(accion='compiló_proyecto', detalle__icontains='error').count()
-    total_exitos = logs.filter(accion='compiló_proyecto', detalle__icontains='exitosa').count()
-    total_sesiones = logs.filter(accion='inició_sesión').count()
+    conteo = Counter(e[1] for e in eventos)
+    resumen = {
+        "total_tooltips": conteo[analitica.TOOLTIP],
+        "total_pegados": conteo[analitica.PEGADO],
+        "total_compilaciones": len(exitos) + len(errores),
+        "total_errores": len(errores),
+        "total_exitos": len(exitos),
+        "total_sesiones": len(sesiones),
+        "sesiones_sin_cierre": sum(1 for s in sesiones if not s['con_cierre']),
+        "errores_por_tipo": dict(Counter(analitica.tipo_error(e[1]) for e in errores)),
+        "guardados_por_origen": dict(Counter(
+            analitica.origen_guardado(e[2]) for e in eventos if e[1] == analitica.GUARDADO)),
+    }
 
     # --- 6. Acciones por tipo (para gráfica de pastel) ---
-    from django.db.models import Count
-    acciones_resumen = list(
-        logs.values('accion').annotate(total=Count('id')).order_by('-total')
-    )
+    acciones_resumen = [{"accion": a, "total": n} for a, n in conteo.most_common()]
 
-    # --- 7. Lista de usuarios para el filtro ---
+    # --- 7. Lista de usuarios para el filtro (sin admins ni, por defecto, sintéticos) ---
     usuarios_list = list(
-        Usuario.objects.filter(is_admin=False).values('id', 'name', 'username')
+        Usuario.objects.filter(is_admin=False)
+        .exclude(id__in=[int(u) for u in excluidos if u.isdigit()])
+        .values('id', 'name', 'username')
     )
 
     return Response({
@@ -1119,14 +1149,8 @@ def dashboard_analytics(request):
         "errores_compilacion_por_dia": errores_compilacion,
         "exitos_compilacion_por_dia": exitos_compilacion,
         "tiempo_diagramas_por_dia": tiempo_diagramas,
-        "resumen": {
-            "total_tooltips": total_tooltips,
-            "total_pegados": total_pegados,
-            "total_compilaciones": total_compilaciones,
-            "total_errores": total_errores,
-            "total_exitos": total_exitos,
-            "total_sesiones": total_sesiones,
-        },
+        "resumen": resumen,
         "acciones_resumen": acciones_resumen,
         "usuarios": usuarios_list,
+        "sinteticos_excluidos": 0 if incluir_sinteticos else len(sinteticos),
     })

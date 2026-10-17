@@ -339,21 +339,22 @@ def generar_plantilla_java(nombre_clase, atributos=[], metodos=[], nombre_padre=
         args_constructor.append(f"{tipo} {nom}")
         own_args_names.append(nom)
 
-    # Generamos la firma del constructor completo
-    firma_args = ", ".join(args_constructor)
-    codigo.append(f"    public {nombre_clase}({firma_args}) {{")
-    
-    # Cuerpo del constructor
-    if nombre_padre and atributos_padre:
-        codigo.append(f"        super({', '.join(super_args)}); // Inicializa atributos del padre")
-    elif nombre_padre:
-        codigo.append("        super();")
-        
-    for nom in own_args_names:
-        codigo.append(f"        this.{nom} = {nom};")
-        
-    codigo.append("    }")
-    codigo.append("")
+    # Sin argumentos sería idéntico al constructor vacío (Java no compila dos iguales)
+    if args_constructor:
+        firma_args = ", ".join(args_constructor)
+        codigo.append(f"    public {nombre_clase}({firma_args}) {{")
+
+        # Cuerpo del constructor
+        if nombre_padre and atributos_padre:
+            codigo.append(f"        super({', '.join(super_args)}); // Inicializa atributos del padre")
+        elif nombre_padre:
+            codigo.append("        super();")
+
+        for nom in own_args_names:
+            codigo.append(f"        this.{nom} = {nom};")
+
+        codigo.append("    }")
+        codigo.append("")
 
     # --- MÉTODOS PROPIOS ---
     # 4. MÉTODOS PROPIOS
@@ -431,6 +432,12 @@ def generar_plantilla_java(nombre_clase, atributos=[], metodos=[], nombre_padre=
     codigo.append("}")
     return "\n".join(codigo)
 
+def _tipo_cpp(tipo):
+    """Convierte los tipos de Java más comunes a su equivalente en C++."""
+    equivalencias = {'string': 'string', 'boolean': 'bool'}
+    return equivalencias.get(tipo.strip().lower(), tipo)
+
+
 def generar_plantilla_cpp(nombre_clase, atributos=[], metodos=[], nombre_padre=None, atributos_padre=[], metodos_padre=[], codigo_viejo={}):
     """
     Genera una clase C++ completa con soporte para herencia, listas de inicialización y sobreescritura.
@@ -459,11 +466,7 @@ def generar_plantilla_cpp(nombre_clase, atributos=[], metodos=[], nombre_padre=N
     # 3. ATRIBUTOS
     for attr in atributos:
         vis = getattr(attr, 'nivel', 'private')
-        tipo = getattr(attr, 'tipo', 'string')
-        # Ajuste de tipos comunes de Java a C++
-        if tipo.lower() == 'string': tipo = 'string'
-        if tipo.lower() == 'boolean': tipo = 'bool'
-        
+        tipo = _tipo_cpp(getattr(attr, 'tipo', 'string'))
         nom = getattr(attr, 'nombre', 'var')
         secciones[vis].append(f"    {tipo} {nom};")
 
@@ -485,30 +488,32 @@ def generar_plantilla_cpp(nombre_clase, atributos=[], metodos=[], nombre_padre=N
 
     if atributos_padre:
         for attr in atributos_padre:
-            tipo = getattr(attr, 'tipo', 'string')
+            tipo = _tipo_cpp(getattr(attr, 'tipo', 'string'))
             nom = getattr(attr, 'nombre', 'p_var')
             args_cons.append(f"{tipo} {nom}")
             super_args.append(nom)
 
     for attr in atributos:
-        tipo = getattr(attr, 'tipo', 'string')
+        tipo = _tipo_cpp(getattr(attr, 'tipo', 'string'))
         nom = getattr(attr, 'nombre', 'var')
         args_cons.append(f"{tipo} {nom}")
         init_list.append(f"{nom}({nom})")
 
-    firma_cons = f"    {nombre_clase}({', '.join(args_cons)})"
-    
-    # Construcción de la lista de inicialización (estilo C++)
-    elementos_init = []
-    if nombre_padre and super_args:
-        elementos_init.append(f"{nombre_padre}({', '.join(super_args)})")
-    if init_list:
-        elementos_init.extend(init_list)
-    
-    if elementos_init:
-        firma_cons += " : " + ", ".join(elementos_init)
-    
-    secciones['public'].append(firma_cons + " {}")
+    # Sin argumentos sería idéntico al constructor vacío ("cannot be overloaded")
+    if args_cons:
+        firma_cons = f"    {nombre_clase}({', '.join(args_cons)})"
+
+        # Construcción de la lista de inicialización (estilo C++)
+        elementos_init = []
+        if nombre_padre and super_args:
+            elementos_init.append(f"{nombre_padre}({', '.join(super_args)})")
+        if init_list:
+            elementos_init.extend(init_list)
+
+        if elementos_init:
+            firma_cons += " : " + ", ".join(elementos_init)
+
+        secciones['public'].append(firma_cons + " {}")
     secciones['public'].append("")
 
     # 5. MÉTODOS PROPIOS
@@ -695,8 +700,8 @@ def actualizar_codigo_main(usuario_id, proyecto_id, nombre_clase, lenguaje):
             
         with open(ruta_absoluta_archivo, 'w', encoding='utf-8') as f:
             if lenguaje == 'cpp':
-                # Incluimos el #pragma once que acordamos para evitar redefiniciones
-                f.write('#pragma once\n#include <iostream>\nusing namespace std;\n\nint main() {\n    return 0;\n}')
+                # Sin "#pragma once": Main.cpp es el archivo que se compila, nunca se incluye
+                f.write('#include <iostream>\nusing namespace std;\n\nint main() {\n    return 0;\n}')
             else:
                 f.write('public class Main {\n    public static void main(String[] args) {\n    }\n}')
 
