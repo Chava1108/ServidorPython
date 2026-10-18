@@ -21,8 +21,16 @@ CSV_SINTETICO = os.path.join(DIR_DATOS, 'log_actividad.csv')        # datos de p
 ETIQUETAS = {0: 'Bajo', 1: 'Medio', 2: 'Alto'}
 
 
-def cargar_logs(ruta=None):
-    """Lee el CSV de logs (por defecto el real; si no existe, el sintético con un aviso)."""
+CSV_CALIFICACIONES = os.path.join(DIR_DATOS, 'calificaciones.csv')   # generado por exportar_logs.py
+UMBRAL_APROBADO = 70   # variable objetivo binaria: post-test >= 70
+
+
+def cargar_logs(ruta=None, grupos=None, dias=None):
+    """
+    Lee el CSV de logs (por defecto el real; si no existe, el sintético con un aviso).
+    grupos: lista de grupos a conservar (p. ej. ['experimental']); requiere la columna 'grupo'.
+    dias: conserva solo los primeros N días de actividad de cada alumno (predicción temprana).
+    """
     if ruta is None:
         ruta = CSV_REAL if os.path.exists(CSV_REAL) else CSV_SINTETICO
     if ruta == CSV_SINTETICO:
@@ -32,8 +40,27 @@ def cargar_logs(ruta=None):
     df['fecha'] = pd.to_datetime(df['fecha'])
     df['usuario'] = df['usuario'].astype(str)
     df['detalle'] = df['detalle'].fillna('')
-    print(f"Logs cargados de {ruta}: {len(df)} eventos, {df['usuario'].nunique()} usuarios\n")
+    if grupos and 'grupo' in df.columns:
+        df = df[df['grupo'].isin(grupos)]
+    if dias:
+        inicio = df.groupby('usuario')['fecha'].transform('min')
+        df = df[df['fecha'] < inicio + pd.Timedelta(days=dias)]
+    print(f"Logs cargados de {ruta}: {len(df)} eventos, {df['usuario'].nunique()} usuarios"
+          + (f" (grupos: {', '.join(grupos)})" if grupos else "")
+          + (f" (primeros {dias} días)" if dias else "") + "\n")
     return df
+
+
+def etiqueta_post_test(f, ruta=CSV_CALIFICACIONES, umbral=UMBRAL_APROBADO):
+    """
+    Variable objetivo real (A-18): 1 si el post-test del alumno es >= umbral, 0 si no.
+    Devuelve una Serie alineada con f; los alumnos sin post-test quedan como NaN.
+    """
+    if not os.path.exists(ruta):
+        return None
+    notas = pd.read_csv(ruta, dtype={'usuario': str}).set_index('usuario')
+    post = notas['post'].reindex(f.index)
+    return (post >= umbral).astype(float).where(post.notna())
 
 
 def construir(df):

@@ -9,6 +9,7 @@ from .serializers import *
 from .utils import *
 from rest_framework.exceptions import ValidationError
 from django.contrib.auth import authenticate
+from django.contrib.auth.models import update_last_login
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.authtoken.models import Token
 from .compile import compilar_cpp, compilar_java
@@ -17,6 +18,11 @@ from django.db import transaction
 from datetime import timedelta
 import re
 from django.views.decorators.csrf import csrf_exempt
+
+def _es_grupo_control(id_usuario):
+    """El grupo de control del estudio no usa el entorno de programación, solo los exámenes."""
+    return str(id_usuario or '').isdigit() and Usuario.objects.filter(pk=int(id_usuario), grupo='control').exists()
+
 
 # --- REGISTRO DE USUARIO ---
 @api_view(['POST'])
@@ -430,18 +436,26 @@ def crear_clase(request):
         return Response({"error": str(e)}, status=500)
 
 # --- USUARIOS Y PROYECTOS ---
-@api_view(['GET', 'POST'])
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
 def gestionar_usuarios(request):
-    if request.method == 'GET':
-        usuarios = Usuario.objects.all()
-        serializer = UsuarioSerializer(usuarios, many=True)
-        return Response(serializer.data)
-    elif request.method == 'POST':
-        serializer = UsuarioSerializer(data=request.data)
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=201)
-        return Response(serializer.errors, status=400)
+    """
+    Lista mínima de usuarios, solo para administradores (A-12): nunca expone el hash de la
+    contraseña ni los datos sociodemográficos. Los usuarios se crean con /api/register/.
+    """
+    if not getattr(request.user, 'is_admin', False):
+        return Response({"error": "Acceso solo para administradores"}, status=403)
+    usuarios = Usuario.objects.filter(is_admin=False).order_by('username').values('id', 'username', 'name', 'grupo')
+    return Response(list(usuarios))
+
+
+@api_view(['GET'])
+def usuario_disponible(request):
+    """El registro comprueba si un nombre de usuario está libre sin descargar la lista de cuentas."""
+    username = (request.query_params.get('username') or '').strip()
+    if not username:
+        return Response({"error": "Falta el nombre de usuario"}, status=400)
+    return Response({"disponible": not Usuario.objects.filter(username__iexact=username).exists()})
 
 @api_view(['GET'])
 def get_proyectos_usuario(request, id):
@@ -460,6 +474,8 @@ def get_proyecto_individual(request):
 
 @api_view(['POST'])
 def crear_proyecto(request):
+    if _es_grupo_control(request.data.get('id_usr')):
+        return Response({"error": "El grupo de control solo presenta exámenes"}, status=403)
     serializer = ProyectoSerializer(data=request.data)
     if serializer.is_valid():
         proyecto_nuevo=serializer.save()
@@ -481,7 +497,8 @@ def crear_proyecto(request):
             Clase.objects.create(
                 nombre="Main",
                 id_proyecto=proyecto_nuevo, # Pasamos la instancia del proyecto recién creado
-                path_archivo=ruta_absoluta_archivo,
+                # Ruta relativa a BASE_DIR, igual que las demás clases (portable entre servidores)
+                path_archivo=os.path.join(ruta_relativa_carpeta, nombre_archivo).replace('\\', '/'),
 
             )
             
@@ -598,10 +615,34 @@ def listar_archivos_proyecto(request, proyecto_id):
     except Exception as e:
         return Response({"error": str(e)}, status=500)
     
+CARPETA_CODIGOS = os.path.realpath(os.path.join(settings.BASE_DIR, 'codigos_fuente'))
+EXTENSIONES_CODIGO = ('.java', '.cpp')
+
+
+def _ruta_codigo_segura(ruta_relativa, proyecto=None):
+    """
+    Resuelve una ruta enviada por el cliente y la acepta solo si queda dentro de
+    codigos_fuente/ (o, si se indica el proyecto, dentro de la carpeta de ese proyecto)
+    y es un archivo .java o .cpp. Devuelve la ruta absoluta o None (A-10).
+    """
+    if not ruta_relativa or not isinstance(ruta_relativa, str):
+        return None
+    ruta = os.path.realpath(os.path.join(settings.BASE_DIR, ruta_relativa.replace('\\', '/')))
+    base = CARPETA_CODIGOS
+    if proyecto is not None:
+        dueno = proyecto.id_usr_id
+        base = os.path.realpath(os.path.join(CARPETA_CODIGOS, f'usuario_{dueno}', f'proyecto_{proyecto.id}'))
+    if os.path.commonpath([ruta, base]) != base or not ruta.lower().endswith(EXTENSIONES_CODIGO):
+        return None
+    return ruta
+
+
 @api_view(['POST'])
 def leer_archivo_fisico(request):
     ruta = request.data.get('ruta') # "codigos_fuente/usuario_1/..."
-    ruta_abs = os.path.join(settings.BASE_DIR, ruta)
+    ruta_abs = _ruta_codigo_segura(ruta)
+    if ruta_abs is None:
+        return Response({"error": "Ruta de archivo no permitida"}, status=400)
     try:
         with open(ruta_abs, 'r', encoding='utf-8') as f:
             return Response({"codigo": f.read()})
@@ -617,6 +658,9 @@ def compilar_y_ejecutar_proyecto(request):
     
     if entradas_usuario and not entradas_usuario.endswith('\n'):
         entradas_usuario += '\n'
+
+    if _es_grupo_control(id_usuario_actual):
+        return Response({"exito": False, "mensaje": "El grupo de control solo presenta exámenes."}, status=403)
 
     try:
         # 1. Obtener datos
@@ -687,7 +731,10 @@ def guardar_archivo_cambios(request):
 
     try:
         proyecto = Proyecto.objects.get(pk=id_proyecto)
-        ruta_absoluta = os.path.join(settings.BASE_DIR, ruta_relativa)
+        # Solo archivos .java/.cpp dentro de la carpeta de ESTE proyecto
+        ruta_absoluta = _ruta_codigo_segura(ruta_relativa, proyecto)
+        if ruta_absoluta is None:
+            return Response({"error": "Ruta de archivo no permitida para este proyecto"}, status=400)
         registrar_xapi(
             proyecto.id_usr.id if hasattr(proyecto.id_usr, 'id') else proyecto.id_usr,
             "guardó_código",
@@ -726,6 +773,10 @@ def login_view(request):
             # --- ZONA DE LOGS PARA TU TESIS ---
             # Registramos que el alumno entró exitosamente
             token, created = Token.objects.get_or_create(user=user)
+            # El login es por token (no llama a django.contrib.auth.login), así que Django no
+            # actualiza last_login por sí solo. No se usa login(): duplicaría el evento
+            # inició_sesión mediante la señal user_logged_in de signals.py.
+            update_last_login(None, user)
             registrar_xapi(user.id, "inició_sesión", "Acceso desde Login Web")
             
             # 4. Respuesta Exitosa
@@ -735,6 +786,7 @@ def login_view(request):
                 'username': user.username,
                 'token': token.key,
                 'is_admin': 1 if user.is_admin else 0,
+                'grupo': user.grupo,  # 'control' solo ve los exámenes
                 'mensaje': 'Login exitoso'
             }, status=status.HTTP_200_OK)
         else:
@@ -817,6 +869,7 @@ def crear_examen(request):
                 creado_por=creador,
                 fecha_disponible=datos['fecha_disponible'],
                 duracion_minutos=datos.get('duracion_minutos', 30),
+                tipo=datos.get('tipo', 'practica') if datos.get('tipo') in ('pre', 'post', 'practica') else 'practica',
             )
 
             for p_data in datos.get('preguntas', []):
@@ -1057,10 +1110,10 @@ def dashboard_analytics(request):
     """
     Endpoint para el dashboard del admin.
     Devuelve métricas agregadas del log de actividad (cálculos en core/analitica.py).
-    Query params opcionales: ?usuario_id=X&dias=14&incluir_sinteticos=1
+    Query params opcionales: ?usuario_id=X&dias=14&grupo=<todos|estudio|experimental|control|pruebas|sinteticos|sin_asignar>
     - Las fechas se agrupan en hora local (America/Mexico_City), no en UTC.
-    - Se excluyen los administradores y, salvo incluir_sinteticos=1, los usuarios
-      generados por simular_estudiantes.py.
+    - Siempre se excluyen los administradores. 'todos' (por defecto) excluye además a los
+      sintéticos; 'estudio' = experimental + control.
     """
     from collections import Counter, defaultdict
     from . import analitica
@@ -1074,18 +1127,20 @@ def dashboard_analytics(request):
         dias = max(1, min(int(request.query_params.get('dias', 14)), 365))
     except ValueError:
         dias = 14
-    incluir_sinteticos = request.query_params.get('incluir_sinteticos') == '1'
+    grupo = request.query_params.get('grupo') or 'todos'
     fecha_limite = timezone.now() - timedelta(days=dias)
 
-    # Usuarios que no deben aparecer en las métricas
-    admins = {str(i) for i in Usuario.objects.filter(is_admin=True).values_list('id', flat=True)}
-    sinteticos = set(
-        LogActividad.objects.filter(accion__in=analitica.VERBOS_SIMULADOR)
-        .values_list('usuario', flat=True).distinct()
-    )
-    excluidos = admins if incluir_sinteticos else admins | sinteticos
+    # Estudiantes del grupo elegido (los logs guardan el id del usuario como texto)
+    estudiantes = Usuario.objects.filter(is_admin=False)
+    if grupo == 'estudio':
+        estudiantes = estudiantes.filter(grupo__in=Usuario.GRUPOS_ESTUDIO)
+    elif grupo == 'todos':
+        estudiantes = estudiantes.exclude(grupo='sinteticos')
+    else:
+        estudiantes = estudiantes.filter(grupo=grupo)
+    ids_grupo = [str(i) for i in estudiantes.values_list('id', flat=True)]
 
-    logs = LogActividad.objects.filter(fecha__gte=fecha_limite).exclude(usuario__in=excluidos)
+    logs = LogActividad.objects.filter(fecha__gte=fecha_limite, usuario__in=ids_grupo)
     if usuario_id:
         logs = logs.filter(usuario=str(usuario_id))
 
@@ -1137,12 +1192,8 @@ def dashboard_analytics(request):
     # --- 6. Acciones por tipo (para gráfica de pastel) ---
     acciones_resumen = [{"accion": a, "total": n} for a, n in conteo.most_common()]
 
-    # --- 7. Lista de usuarios para el filtro (sin admins ni, por defecto, sintéticos) ---
-    usuarios_list = list(
-        Usuario.objects.filter(is_admin=False)
-        .exclude(id__in=[int(u) for u in excluidos if u.isdigit()])
-        .values('id', 'name', 'username')
-    )
+    # --- 7. Lista de usuarios del grupo elegido para el filtro ---
+    usuarios_list = list(estudiantes.values('id', 'name', 'username', 'grupo'))
 
     return Response({
         "tiempo_sesion_por_dia": tiempo_sesion,
@@ -1152,5 +1203,6 @@ def dashboard_analytics(request):
         "resumen": resumen,
         "acciones_resumen": acciones_resumen,
         "usuarios": usuarios_list,
-        "sinteticos_excluidos": 0 if incluir_sinteticos else len(sinteticos),
+        "grupo": grupo,
+        "sinteticos_excluidos": Usuario.objects.filter(grupo='sinteticos').count() if grupo == 'todos' else 0,
     })

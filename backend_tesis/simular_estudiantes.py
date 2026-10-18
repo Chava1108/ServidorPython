@@ -62,16 +62,16 @@ with connection.cursor() as cursor:
     print("  [OK] LogActividad limpiado")
     
     # Limpiar herencia (managed=False, usar raw)
-    cursor.execute("DELETE FROM herencia;")
+    cursor.execute("DELETE FROM tr_herencias;")
     print("  [OK] Herencia limpiado")
     
     # Limpiar funciones y atributos (managed=False)
-    cursor.execute("DELETE FROM funciones;")
-    cursor.execute("DELETE FROM atributos;")
+    cursor.execute("DELETE FROM tc_funciones;")
+    cursor.execute("DELETE FROM tc_atributos;")
     print("  [OK] Funciones y Atributos limpiados")
     
     # Limpiar clases (managed=False)
-    cursor.execute("DELETE FROM clase;")
+    cursor.execute("DELETE FROM tc_clases;")
     print("  [OK] Clases limpiado")
     
     # Limpiar proyectos
@@ -589,7 +589,7 @@ for idx, estudiante in enumerate(estudiantes):
                 from django.db import connection as conn2
                 with conn2.cursor() as cur:
                     cur.execute(
-                        "INSERT INTO herencia (id_clasePadre, id_claseHijo) VALUES (%s, %s)",
+                        "INSERT INTO tr_herencias (id_clase_padre, id_clase_hija) VALUES (%s, %s)",
                         [clases_map[datos_clase["padre"]].id, clases_map[nombre_clase].id]
                     )
         

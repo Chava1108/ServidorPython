@@ -1,79 +1,111 @@
 """
-Modelo predictivo de rendimiento (Random Forest) a partir de los logs de interacción.
+Modelos predictivos del rendimiento a partir de los logs de interacción:
+Regresión logística y Random Forest, comparados contra la línea base (clase mayoritaria).
+
+Variable objetivo:
+  - Real (A-18): post-test >= 70, leído de datos/calificaciones.csv (exportar_logs.py).
+  - Si aún no hay post-tests suficientes, una etiqueta heurística PROVISIONAL (con aviso).
 
 Uso (desde backend_tesis/modelo):
-    python modelo_random_forest.py                 # datos/log_actividad_real.csv (o el sintético si no existe)
-    python modelo_random_forest.py ruta/logs.csv   # otro archivo exportado
+    python modelo_random_forest.py                         # todos los alumnos reales
+    python modelo_random_forest.py --grupo experimental    # solo el grupo experimental
+    python modelo_random_forest.py --dias 14               # predicción temprana: 2 primeras semanas
+    python modelo_random_forest.py --logs ruta.csv
 """
-import sys
+import argparse
 
 import pandas as pd
+from sklearn.dummy import DummyClassifier
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
-from sklearn.model_selection import LeaveOneOut, cross_val_predict, train_test_split
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, f1_score
+from sklearn.model_selection import LeaveOneOut, StratifiedKFold, cross_val_predict
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
 
-from caracteristicas import ETIQUETAS, cargar_logs, construir, etiqueta_heuristica
-
-MIN_PARTICION = 50   # por debajo de este número de usuarios se usa validación cruzada leave-one-out
+from caracteristicas import ETIQUETAS, UMBRAL_APROBADO, cargar_logs, construir, etiqueta_heuristica, etiqueta_post_test
 
 COLUMNAS_X = ['tiempo_sesion_min', 'errores', 'tasa_error', 'compilaciones_ok',
               'uso_herencia', 'uso_protected', 'total_acciones', 'guardados',
               'sesiones_inactivas', 'tiempo_diagrama_min', 'tooltips']
+MIN_PARTICION = 50    # por debajo de este número de alumnos: leave-one-out; si no, 5 particiones
+MIN_ALUMNOS = 10
 
 
-def entrenar_modelo(ruta=None):
-    features = construir(cargar_logs(ruta))
-    # PROVISIONAL (A-18): sustituir por la calificación del post-test cuando se aplique
-    features['rendimiento'] = etiqueta_heuristica(features)
+def preparar(args):
+    features = construir(cargar_logs(args.logs, [args.grupo] if args.grupo else None, args.dias))
+    real = etiqueta_post_test(features)
+    if real is not None and real.notna().sum() >= MIN_ALUMNOS:
+        features = features[real.notna()].copy()
+        features['rendimiento'] = real.dropna().astype(int)
+        nombres = {0: f'Post < {UMBRAL_APROBADO}', 1: f'Post >= {UMBRAL_APROBADO}'}
+        print(f"Variable objetivo REAL: post-test >= {UMBRAL_APROBADO} ({len(features)} alumnos con post-test)\n")
+    else:
+        features['rendimiento'] = etiqueta_heuristica(features)
+        nombres = ETIQUETAS
+        print("AVISO: no hay suficientes post-tests; se usa la etiqueta heurística PROVISIONAL.\n")
+    return features, nombres
 
-    print("=" * 80)
-    print("TABLA DE CARACTERÍSTICAS POR USUARIO")
-    print("=" * 80)
-    pd.set_option('display.max_columns', None)
+
+def evaluar(nombre, modelo, X, y, cv, nombres):
+    pred = cross_val_predict(modelo, X, y, cv=cv)
+    clases = sorted(y.unique())
+    print("-" * 80)
+    print(nombre)
+    print("-" * 80)
+    print(f"Exactitud: {accuracy_score(y, pred):.2f}   F1 macro: {f1_score(y, pred, average='macro', zero_division=0):.2f}")
+    print(classification_report(y, pred, labels=clases, target_names=[nombres[c] for c in clases], zero_division=0))
+    print("Matriz de confusión (filas = real, columnas = predicho):")
+    print(confusion_matrix(y, pred, labels=clases))
+    return f1_score(y, pred, average='macro', zero_division=0)
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument('--logs', default=None)
+    p.add_argument('--grupo', default=None, help='experimental, control, pruebas...')
+    p.add_argument('--dias', type=int, default=None, help='usar solo los primeros N días de actividad')
+    args = p.parse_args()
+
+    features, nombres = preparar(args)
     pd.set_option('display.width', 220)
     pd.set_option('display.float_format', '{:.2f}'.format)
-    tabla = features[COLUMNAS_X + ['rendimiento']].copy()
-    tabla['rendimiento_etq'] = tabla['rendimiento'].map(ETIQUETAS)
-    print(tabla.to_string())
-    print("\nDistribución de rendimiento:")
-    print(features['rendimiento'].map(ETIQUETAS).value_counts().to_string())
-    print(f"Total usuarios: {len(features)}")
+    print(features[COLUMNAS_X + ['rendimiento']].to_string())
+    print("\nDistribución:", features['rendimiento'].map(nombres).value_counts().to_dict())
 
-    if len(features) < 10:
-        print("\nHay menos de 10 usuarios: no es posible entrenar y evaluar el modelo con fiabilidad.")
+    if len(features) < MIN_ALUMNOS or features['rendimiento'].nunique() < 2:
+        print(f"\nSe necesitan al menos {MIN_ALUMNOS} alumnos y dos clases para entrenar y evaluar.")
         return
 
-    X, y = features[COLUMNAS_X], features['rendimiento']
-
-    print("\n" + "=" * 80)
-    print("ENTRENAMIENTO DEL MODELO RANDOM FOREST")
-    print("=" * 80)
-    modelo = RandomForestClassifier(n_estimators=100, random_state=42)
-
-    if len(features) < MIN_PARTICION:
-        # Con pocos alumnos, una partición 80/20 deja 2 o 3 casos de prueba: se evalúa cada
-        # alumno con un modelo entrenado con todos los demás (validación cruzada leave-one-out)
-        print(f"\n{len(features)} usuarios: evaluación con validación cruzada leave-one-out")
-        y_test = y
-        predicciones = cross_val_predict(modelo, X, y, cv=LeaveOneOut())
-        modelo.fit(X, y)
+    X, y = features[COLUMNAS_X].astype(float), features['rendimiento']
+    minoritaria = y.value_counts().min()
+    if len(features) < MIN_PARTICION or minoritaria < 5:
+        cv, desc = LeaveOneOut(), "validación cruzada leave-one-out"
     else:
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.20, random_state=42, stratify=y)
-        modelo.fit(X_train, y_train)
-        predicciones = modelo.predict(X_test)
+        cv, desc = StratifiedKFold(n_splits=5, shuffle=True, random_state=42), "validación cruzada estratificada de 5 particiones"
+    print(f"\n{len(features)} alumnos · evaluación con {desc}\n")
 
-    print(f"\nPrecisión (Accuracy): {accuracy_score(y_test, predicciones):.2f}")
-    print("\nReporte de Clasificación:")
-    clases = sorted(y.unique())
-    print(classification_report(y_test, predicciones, labels=clases,
-                                target_names=[ETIQUETAS[i] for i in clases], zero_division=0))
-    print("Matriz de Confusión:")
-    print(confusion_matrix(y_test, predicciones, labels=clases))
+    resultados = {
+        "Línea base (clase mayoritaria)": evaluar("LÍNEA BASE (clase mayoritaria)",
+                                                  DummyClassifier(strategy='most_frequent'), X, y, cv, nombres),
+        "Regresión logística": evaluar("MODELO 1 · REGRESIÓN LOGÍSTICA",
+                                       make_pipeline(StandardScaler(), LogisticRegression(max_iter=1000, class_weight='balanced')),
+                                       X, y, cv, nombres),
+        "Random Forest": evaluar("MODELO 2 · RANDOM FOREST",
+                                 RandomForestClassifier(n_estimators=200, random_state=42, class_weight='balanced'),
+                                 X, y, cv, nombres),
+    }
 
-    print("\nImportancia de Características:")
-    for nombre, imp in sorted(zip(X.columns, modelo.feature_importances_), key=lambda x: x[1], reverse=True):
+    print("=" * 80)
+    print("COMPARACIÓN (F1 macro)")
+    for nombre, f1 in resultados.items():
+        print(f"  {nombre:<32} {f1:.2f}")
+
+    rf = RandomForestClassifier(n_estimators=200, random_state=42, class_weight='balanced').fit(X, y)
+    print("\nImportancia de características (Random Forest entrenado con todos los alumnos):")
+    for nombre, imp in sorted(zip(X.columns, rf.feature_importances_), key=lambda x: x[1], reverse=True):
         print(f"  {nombre:<22} {imp:.4f}  {'#' * int(imp * 50)}")
 
 
 if __name__ == "__main__":
-    entrenar_modelo(sys.argv[1] if len(sys.argv) > 1 else None)
+    main()

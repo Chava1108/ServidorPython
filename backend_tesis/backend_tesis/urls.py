@@ -1,6 +1,8 @@
 from django.contrib import admin
 from django.urls import path
 from core import views
+from core import views_admin
+from core import clases
 from django.conf import settings
 from django.conf.urls.static import static
 
@@ -14,7 +16,8 @@ urlpatterns = [
     # --- CLASES ---
     path('api/clasesProyectId/<int:id>', views.get_clases_proyecto),
     path('api/clasesId', views.get_clase_id),
-    path('api/clases', views.crear_clase), # POST
+    path('api/clases', views.crear_clase), # POST (flujo anterior, clase vacía)
+    path('api/clases/completa', clases.crear_clase_completa),  # POST: editor UML (vista previa y creación)
     path('api/clase/<int:id>', views.gestionar_clase_individual), # DELETE
 
     # --- ATRIBUTOS ---
@@ -35,7 +38,8 @@ urlpatterns = [
 
     # --- USUARIOS Y PROYECTOS ---
     # GET: lista, POST: crear
-    path('api/usuario', views.gestionar_usuarios),
+    path('api/usuario', views.gestionar_usuarios),  # GET, solo administradores
+    path('api/usuario-disponible', views.usuario_disponible),
     
     path('api/proyecto/<int:id>', views.get_proyectos_usuario),
     path('api/proyectoIndividual', views.get_proyecto_individual),
@@ -62,6 +66,15 @@ urlpatterns = [
     path('api/examenes/iniciar', views.iniciar_intento_examen),
     path('api/examenes/enviar', views.enviar_respuestas_examen),
     path('api/examenes/resultados/<int:id_intento>', views.resultados_examen_estudiante),
+
+    # --- PANEL DE ADMINISTRACIÓN (token de administrador) ---
+    path('api/admin/estudiantes', views_admin.estudiantes),
+    path('api/admin/estudiantes/grupo', views_admin.asignar_grupo),
+    path('api/admin/examenes', views_admin.examenes),
+    path('api/admin/examenes/<int:id_examen>', views_admin.examen_detalle),
+    path('api/admin/examenes/<int:id_examen>/resultados', views_admin.resultados_examen),
+    path('api/admin/intentos/<int:id_intento>', views_admin.intento_detalle),
+    path('api/admin/ganancia', views_admin.ganancia_aprendizaje),
 ]
 
 # Servir archivos media (imágenes) - funciona en desarrollo y producción

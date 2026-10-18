@@ -10,7 +10,7 @@ import sys
 import pandas as pd
 from skrebate import ReliefF
 
-from caracteristicas import cargar_logs, construir, etiqueta_heuristica
+from caracteristicas import cargar_logs, construir, etiqueta_heuristica, etiqueta_post_test
 from modelo_random_forest import COLUMNAS_X
 
 RUTA_SALIDA = 'caracteristicas_seleccionadas.csv'
@@ -18,8 +18,14 @@ RUTA_SALIDA = 'caracteristicas_seleccionadas.csv'
 
 def procesar_modelo(ruta=None):
     features = construir(cargar_logs(ruta))
-    # PROVISIONAL (A-18): antes se usaban etiquetas aleatorias; ahora la misma etiqueta que el modelo
-    y = etiqueta_heuristica(features).values
+    # Misma variable objetivo que el modelo: post-test real si existe; si no, la heurística provisional
+    real = etiqueta_post_test(features)
+    if real is not None and real.notna().sum() >= 10:
+        features = features[real.notna()]
+        y = real.dropna().astype(int).values
+    else:
+        print("AVISO: sin post-tests suficientes; se usa la etiqueta heurística PROVISIONAL.")
+        y = etiqueta_heuristica(features).values
     X = features[COLUMNAS_X].astype(float).values
 
     print("--- Ejecutando Algoritmo RELIEF ---")

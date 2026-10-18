@@ -4,6 +4,7 @@ import shutil
 import signal
 import subprocess
 import tempfile
+import time
 
 # --- Límites de ejecución ---
 TIEMPO_COMPILACION = 15            # segundos
@@ -12,6 +13,17 @@ LIMITE_SALIDA = 64 * 1024          # bytes de stdout/stderr que se devuelven al 
 LIMITE_ARCHIVO = 10 * 1024 * 1024  # tamaño máximo de lo que el programa escribe (incluye su salida)
 LIMITE_MEMORIA_CPP = 512 * 1024 * 1024
 MEMORIA_JVM = "-Xmx256m"           # la JVM no tolera RLIMIT_AS; se limita con su propia opción
+# Idioma fijo: Scanner lee decimales con punto (2.5) igual en el servidor y en Windows en español
+LOCALE_JVM = ["-Duser.language=en", "-Duser.country=US"]
+
+# Pistas para las excepciones de entrada más comunes en Java
+PISTAS_JAVA = {
+    "InputMismatchException": ("💡 Un dato de entrada no coincide con el tipo que lee el programa "
+                               "(por ejemplo, «2,» o un texto donde se espera un número). Escribe un valor "
+                               "por línea o sepáralos con espacios, sin comas, y usa punto decimal: 2.5"),
+    "NoSuchElementException": ("💡 El programa esperaba más datos de entrada. Escribe todos los valores en "
+                               "el panel de entrada antes de ejecutar, uno por línea."),
+}
 
 ES_POSIX = os.name == "posix"
 if ES_POSIX:
@@ -84,6 +96,29 @@ def _motivo_terminacion(codigo):
     return ""
 
 
+def _fin_ejecucion(resultado, codigo, salida, segundos, extra=""):
+    """
+    Agrega al mensaje el cierre de la ejecución, como en un IDE:
+    código de salida y tiempo, también cuando el programa no imprime nada.
+    """
+    if not salida.strip() and not extra.strip():
+        salida = "(el programa terminó sin imprimir nada)"
+    pie = f"\n\n── Proceso finalizado con código de salida {codigo} · {segundos:.2f} s ──"
+    resultado.update({
+        "mensaje": salida + extra + _motivo_terminacion(codigo) + pie,
+        "codigo_salida": codigo,
+        "tiempo_ms": round(segundos * 1000),
+    })
+    return resultado
+
+
+def _tiempo_agotado(lenguaje, salida):
+    return {"exito": False, "tipo_error": "tiempo", "codigo_salida": None,
+            "tiempo_ms": TIEMPO_EJECUCION * 1000,
+            "mensaje": (salida + f"\n\n⏱️ Proceso detenido: el programa {lenguaje} superó "
+                        f"{TIEMPO_EJECUCION} s (¿un ciclo infinito o espera datos de entrada?)")}
+
+
 def compilar_cpp(ruta_absoluta, archivos_cpp, entradas_usuario):
     """
     Compila y ejecuta un proyecto C++.
@@ -109,14 +144,13 @@ def compilar_cpp(ruta_absoluta, archivos_cpp, entradas_usuario):
             return {"exito": False, "tipo_error": "compilacion",
                     "mensaje": "❌ Error de Compilación C++:\n" + AVISO_PRAGMA.sub("", errores)}
 
+        inicio = time.monotonic()
         codigo, salida, errores = _ejecutar([ejecutable], ruta_absoluta, entradas_usuario,
                                             memoria=LIMITE_MEMORIA_CPP)
         if codigo is None:
-            return {"exito": False, "tipo_error": "tiempo",
-                    "mensaje": "⏱️ Timeout: El programa C++ tardó demasiado en ejecutarse.\n" + salida}
-        if errores:
-            salida += "\n⚠️ Salida de error (stderr):\n" + errores
-        return {"exito": True, "mensaje": salida + _motivo_terminacion(codigo)}
+            return _tiempo_agotado("C++", salida)
+        extra = "\n⚠️ Salida de error (stderr):\n" + errores if errores else ""
+        return _fin_ejecucion({"exito": True}, codigo, salida, time.monotonic() - inicio, extra)
     finally:
         shutil.rmtree(carpeta_tmp, ignore_errors=True)
 
@@ -139,14 +173,16 @@ def compilar_java(ruta_absoluta, archivos_java, entradas_usuario):
         return {"exito": False, "tipo_error": "estructura",
                 "mensaje": "⚠️ Compiló bien, pero falta 'Main.java' para ejecutar."}
 
-    codigo, salida, errores = _ejecutar(["java", MEMORIA_JVM, "-cp", ".", "Main"],
+    inicio = time.monotonic()
+    codigo, salida, errores = _ejecutar(["java", MEMORIA_JVM] + LOCALE_JVM + ["-cp", ".", "Main"],
                                         ruta_absoluta, entradas_usuario)
     if codigo is None:
-        return {"exito": False, "tipo_error": "tiempo",
-                "mensaje": "⏱️ Timeout: El programa Java tardó demasiado.\n" + salida}
+        return _tiempo_agotado("Java", salida)
+    extra = ""
     if errores:
-        salida += "\n⚠️ Errores ejecución:\n" + errores
-    return {"exito": True, "mensaje": salida + _motivo_terminacion(codigo)}
+        extra = "\n⚠️ Errores ejecución:\n" + errores
+        extra += "".join("\n" + pista for exc, pista in PISTAS_JAVA.items() if exc in errores)
+    return _fin_ejecucion({"exito": True}, codigo, salida, time.monotonic() - inicio, extra)
 
 
 def _usa_package(ruta_absoluta, archivos_java):

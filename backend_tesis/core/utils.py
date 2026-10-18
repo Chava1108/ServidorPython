@@ -281,28 +281,52 @@ def analizar_codigo_java(codigo_fuente):
 
     return resultado
 
+def _firma_metodo(nom_raw, convertir_tipo=None):
+    """
+    Devuelve (firma, nombre_limpio) de un método.
+    nom_raw puede venir como "acelerar" o "acelerar(int cantidad)".
+    convertir_tipo (opcional) se aplica a los tipos de los parámetros (C++).
+    """
+    nom_raw = (nom_raw or 'metodo').strip()
+    if '(' not in nom_raw:
+        return f"{nom_raw}()", nom_raw
+    nombre_limpio = nom_raw.split('(')[0].strip()
+    params = nom_raw[nom_raw.index('(') + 1: nom_raw.rindex(')') if ')' in nom_raw else len(nom_raw)].strip()
+    if convertir_tipo and params:
+        params = re.sub(r'\b(String|boolean)\b', lambda m: convertir_tipo(m.group(1)), params)
+    return f"{nombre_limpio}({params})", nombre_limpio
+
+
+def _valor_por_defecto_java(tipo):
+    """Valor de retorno inicial de un método Java según su tipo."""
+    if tipo in ('int', 'long', 'short', 'byte', 'char', 'double', 'float'):
+        return "0"
+    if tipo == 'boolean':
+        return "false"
+    return "null"
+
+
 def generar_plantilla_java(nombre_clase, atributos=[], metodos=[], nombre_padre=None, atributos_padre=[], metodos_padre=[], codigo_viejo={}):
     """
-    Genera una clase Java completa con soporte para herencia, constructores y sobreescritura.
+    Genera una clase Java completa: atributos, constructor vacío, constructor con argumentos
+    (solo si hay atributos), métodos con su visibilidad y, opcionalmente, sobrescritura.
+    atributos / metodos: objetos con .nombre, .tipo y .nivel (los métodos pueden traer
+    parámetros en el nombre: "acelerar(int cantidad)").
     """
     codigo = []
-    print("--- INSPECCIONANDO MÉTODOS ---")
-    for m in metodos:
-        print(f"Nombre: {m.nombre}, Tipo: {getattr(m, 'tipo', 'N/A')}")
 
     # 1. DEFINICIÓN DE LA CLASE
     if nombre_padre:
         codigo.append(f"public class {nombre_clase} extends {nombre_padre} {{")
     else:
         codigo.append(f"public class {nombre_clase} {{")
-    
-    codigo.append("") 
+    codigo.append("")
 
     # 2. ATRIBUTOS PROPIOS
     if atributos:
         codigo.append("    // --- Atributos Propios ---")
         for attr in atributos:
-            vis = getattr(attr, 'nivel', 'private') 
+            vis = getattr(attr, 'nivel', 'private') or 'private'
             tipo = getattr(attr, 'tipo', 'String')
             nom = getattr(attr, 'nombre', 'sin_nombre')
             codigo.append(f"    {vis} {tipo} {nom};")
@@ -310,29 +334,19 @@ def generar_plantilla_java(nombre_clase, atributos=[], metodos=[], nombre_padre=
 
     # 3. CONSTRUCTORES
     codigo.append("    // --- Constructores ---")
-    
-    # A) Constructor Vacío
     codigo.append(f"    public {nombre_clase}() {{")
     if nombre_padre:
         codigo.append("        super(); // Llama al constructor del padre")
     codigo.append("    }")
     codigo.append("")
 
-    # B) Constructor con Argumentos (Padre + Hijo)
-    # Recopilamos todos los argumentos necesarios
-    args_constructor = []
-    super_args = []
-    
-    # Primero los del padre (para el super)
-    if atributos_padre:
-        for attr in atributos_padre:
-            tipo = getattr(attr, 'tipo', 'String')
-            nom = getattr(attr, 'nombre', 'var')
-            args_constructor.append(f"{tipo} {nom}")
-            super_args.append(nom)
-            
-    # Luego los propios (para el this)
-    own_args_names = []
+    # Constructor con argumentos (padre + propios)
+    args_constructor, super_args, own_args_names = [], [], []
+    for attr in atributos_padre or []:
+        tipo = getattr(attr, 'tipo', 'String')
+        nom = getattr(attr, 'nombre', 'var')
+        args_constructor.append(f"{tipo} {nom}")
+        super_args.append(nom)
     for attr in atributos:
         tipo = getattr(attr, 'tipo', 'String')
         nom = getattr(attr, 'nombre', 'var')
@@ -341,229 +355,140 @@ def generar_plantilla_java(nombre_clase, atributos=[], metodos=[], nombre_padre=
 
     # Sin argumentos sería idéntico al constructor vacío (Java no compila dos iguales)
     if args_constructor:
-        firma_args = ", ".join(args_constructor)
-        codigo.append(f"    public {nombre_clase}({firma_args}) {{")
-
-        # Cuerpo del constructor
-        if nombre_padre and atributos_padre:
+        codigo.append(f"    public {nombre_clase}({', '.join(args_constructor)}) {{")
+        if nombre_padre and super_args:
             codigo.append(f"        super({', '.join(super_args)}); // Inicializa atributos del padre")
         elif nombre_padre:
             codigo.append("        super();")
-
         for nom in own_args_names:
             codigo.append(f"        this.{nom} = {nom};")
-
         codigo.append("    }")
         codigo.append("")
 
-    # --- MÉTODOS PROPIOS ---
     # 4. MÉTODOS PROPIOS
     if metodos:
         codigo.append("    // --- Métodos Propios ---")
         for met in metodos:
-            vis = getattr(met, 'nivel', 'public') # o 'nivel'
+            vis = getattr(met, 'nivel', 'public') or 'public'
             tipo = getattr(met, 'tipo', 'void')
-            nom_raw = getattr(met, 'nombre', 'sin_nombre')
-
-            # --- NORMALIZACIÓN DEL NOMBRE ---
-            # Queremos asegurar que 'firma' tenga paréntesis y 'nombre_limpio' NO los tenga.
-            if '(' in nom_raw:
-                firma = nom_raw  # Ej: "ladrar(int a)"
-                nombre_limpio = nom_raw.split('(')[0].strip() # Ej: "ladrar"
-            else:
-                firma = f"{nom_raw}()" # Ej: "ladrar()"
-                nombre_limpio = nom_raw # Ej: "ladrar"
-
-            # Generamos la definición usando la FIRMA (con paréntesis)
+            firma, nombre_limpio = _firma_metodo(getattr(met, 'nombre', 'metodo'))
             codigo.append(f"    {vis} {tipo} {firma} {{")
-            
-            # Buscamos en el código viejo usando el NOMBRE LIMPIO
             if nombre_limpio in codigo_viejo:
                 codigo.append(codigo_viejo[nombre_limpio])
-            else:
-                # Default
-                if tipo != 'void':
-                    val = "0" if tipo in ['int','double','float'] else "null"
-                    if tipo == 'boolean': val = "false"
-                    codigo.append(f"        return {val};")
-                    
+            elif tipo != 'void':
+                codigo.append(f"        return {_valor_por_defecto_java(tipo)};")
             codigo.append("    }")
             codigo.append("")
 
-    # 5. MÉTODOS HEREDADOS
+    # 5. MÉTODOS HEREDADOS (ejemplo de sobrescritura)
     if nombre_padre and metodos_padre:
         codigo.append(f"    // --- Métodos heredados de {nombre_padre} (Ejemplo de sobreescritura) ---")
         for met in metodos_padre:
-            vis = getattr(met, 'nivel', 'public') # o 'nivel'
-            
-            if vis in ['protected', 'public']:
-                tipo = getattr(met, 'tipo', 'void')
-                nom_raw = getattr(met, 'nombre', 'sin_nombre')
-                
-                # --- MISMA NORMALIZACIÓN ---
-                if '(' in nom_raw:
-                    firma = nom_raw
-                    nombre_limpio = nom_raw.split('(')[0].strip()
-                else:
-                    firma = f"{nom_raw}()"
-                    nombre_limpio = nom_raw
-                
-                codigo.append("    @Override")
-                # Usamos FIRMA para definir
-                codigo.append(f"    {vis} {tipo} {firma} {{")
-                codigo.append(f"        // Puedes agregar lógica extra aquí")
-                
-                # --- CORRECCIÓN DE LA LLAMADA A SUPER ---
-                # Usamos nombre_limpio + () 
-                # NOTA: Esto asume métodos sin argumentos. Si tienen argumentos (int a), 
-                # pasar 'super.metodo(int a)' es error de Java. 
-                # Para Tesis básica, dejaremos 'super.metodo()' o 'super.metodo(args_dummy)'
-                
-                llamada_super = f"super.{nombre_limpio}()" 
-
-                if tipo == 'void':
-                    codigo.append(f"        {llamada_super}; // Llama a la versión del padre")
-                else:
-                    codigo.append(f"        return {llamada_super};")
-                    
-                codigo.append("    }")
-                codigo.append("")
+            vis = getattr(met, 'nivel', 'public') or 'public'
+            if vis not in ('protected', 'public'):
+                continue
+            tipo = getattr(met, 'tipo', 'void')
+            firma, nombre_limpio = _firma_metodo(getattr(met, 'nombre', 'metodo'))
+            codigo.append("    @Override")
+            codigo.append(f"    {vis} {tipo} {firma} {{")
+            # Asume métodos sin parámetros en la llamada a super (plantilla de ejemplo)
+            llamada_super = f"super.{nombre_limpio}()"
+            codigo.append(f"        {llamada_super};" if tipo == 'void' else f"        return {llamada_super};")
+            codigo.append("    }")
+            codigo.append("")
 
     codigo.append("}")
     return "\n".join(codigo)
 
+
 def _tipo_cpp(tipo):
     """Convierte los tipos de Java más comunes a su equivalente en C++."""
     equivalencias = {'string': 'string', 'boolean': 'bool'}
-    return equivalencias.get(tipo.strip().lower(), tipo)
+    return equivalencias.get((tipo or '').strip().lower(), (tipo or '').strip())
 
 
-def generar_plantilla_cpp(nombre_clase, atributos=[], metodos=[], nombre_padre=None, atributos_padre=[], metodos_padre=[], codigo_viejo={}):
+def generar_plantilla_cpp(nombre_clase, atributos=[], metodos=[], nombre_padre=None, atributos_padre=[], metodos_padre=[], codigo_viejo={}, incluir_clases=()):
     """
-    Genera una clase C++ completa con soporte para herencia, listas de inicialización y sobreescritura.
+    Genera una clase C++ completa. Atributos y métodos se ubican en la sección de su visibilidad
+    (private / protected / public); los constructores siempre son públicos.
+    incluir_clases: otras clases del proyecto usadas como tipo (se agregan sus #include).
     """
-    codigo = []
-    codigo.append("#pragma once")
-    # 1. INCLUDES BÁSICOS
-    codigo.append("#include <iostream>")
-    codigo.append("#include <string>")
-
-    if nombre_padre:
-        codigo.append(f'#include "{nombre_padre}.cpp"')
-
+    codigo = ["#pragma once", "#include <iostream>", "#include <string>"]
+    for clase in [nombre_padre] + [c for c in incluir_clases if c != nombre_padre]:
+        if clase and clase != nombre_clase:
+            codigo.append(f'#include "{clase}.cpp"')
     codigo.append("using namespace std;")
     codigo.append("")
 
-    # 2. DEFINICIÓN DE LA CLASE
+    # 1. DEFINICIÓN DE LA CLASE
     if nombre_padre:
         codigo.append(f"class {nombre_clase} : public {nombre_padre} {{")
     else:
         codigo.append(f"class {nombre_clase} {{")
 
-    # Organizaremos por visibilidad (estilo C++)
     secciones = {'private': [], 'protected': [], 'public': []}
 
-    # 3. ATRIBUTOS
+    # 2. ATRIBUTOS
     for attr in atributos:
-        vis = getattr(attr, 'nivel', 'private')
+        vis = getattr(attr, 'nivel', 'private') or 'private'
         tipo = _tipo_cpp(getattr(attr, 'tipo', 'string'))
         nom = getattr(attr, 'nombre', 'var')
-        secciones[vis].append(f"    {tipo} {nom};")
+        secciones.setdefault(vis, []).append(f"    {tipo} {nom};")
 
-    # 4. MÉTODOS Y CONSTRUCTORES (Siempre en public para este ejemplo)
-    
-    # A) Constructor Vacío
-    cons_vacio = f"    {nombre_clase}()"
-    if nombre_padre:
-        cons_vacio += f" : {nombre_padre}() {{}}"
-    else:
-        cons_vacio += " {}"
-    secciones['public'].append("// --- Constructores ---")
-    secciones['public'].append(cons_vacio)
-
-    # B) Constructor con Argumentos
-    args_cons = []
-    init_list = []
-    super_args = []
-
-    if atributos_padre:
-        for attr in atributos_padre:
-            tipo = _tipo_cpp(getattr(attr, 'tipo', 'string'))
-            nom = getattr(attr, 'nombre', 'p_var')
-            args_cons.append(f"{tipo} {nom}")
-            super_args.append(nom)
-
+    # 3. CONSTRUCTORES (públicos)
+    constructores = ["    // --- Constructores ---"]
+    constructores.append(f"    {nombre_clase}()" + (f" : {nombre_padre}() {{}}" if nombre_padre else " {}"))
+    args_cons, init_list, super_args = [], [], []
+    for attr in atributos_padre or []:
+        args_cons.append(f"{_tipo_cpp(getattr(attr, 'tipo', 'string'))} {getattr(attr, 'nombre', 'p_var')}")
+        super_args.append(getattr(attr, 'nombre', 'p_var'))
     for attr in atributos:
-        tipo = _tipo_cpp(getattr(attr, 'tipo', 'string'))
         nom = getattr(attr, 'nombre', 'var')
-        args_cons.append(f"{tipo} {nom}")
+        args_cons.append(f"{_tipo_cpp(getattr(attr, 'tipo', 'string'))} {nom}")
         init_list.append(f"{nom}({nom})")
-
     # Sin argumentos sería idéntico al constructor vacío ("cannot be overloaded")
     if args_cons:
-        firma_cons = f"    {nombre_clase}({', '.join(args_cons)})"
+        elementos_init = ([f"{nombre_padre}({', '.join(super_args)})"] if nombre_padre and super_args else []) + init_list
+        constructores.append(f"    {nombre_clase}({', '.join(args_cons)})"
+                             + (" : " + ", ".join(elementos_init) if elementos_init else "") + " {}")
+    secciones['public'] = constructores + [""] + secciones['public']
 
-        # Construcción de la lista de inicialización (estilo C++)
-        elementos_init = []
-        if nombre_padre and super_args:
-            elementos_init.append(f"{nombre_padre}({', '.join(super_args)})")
-        if init_list:
-            elementos_init.extend(init_list)
+    # 4. MÉTODOS PROPIOS, en la sección de su visibilidad
+    for met in metodos:
+        vis = getattr(met, 'nivel', 'public') or 'public'
+        tipo = _tipo_cpp(getattr(met, 'tipo', 'void'))
+        firma, nombre_limpio = _firma_metodo(getattr(met, 'nombre', 'metodo'), _tipo_cpp)
+        cuerpo = [f"    virtual {tipo} {firma} {{"]  # virtual: permite el polimorfismo
+        if nombre_limpio in codigo_viejo:
+            cuerpo.append(f"        {codigo_viejo[nombre_limpio]}")
+        elif tipo != 'void':
+            cuerpo.append("        return {};")  # valor por defecto de cualquier tipo (C++11)
+        cuerpo.append("    }")
+        secciones.setdefault(vis, []).append("\n".join(cuerpo))
 
-        if elementos_init:
-            firma_cons += " : " + ", ".join(elementos_init)
-
-        secciones['public'].append(firma_cons + " {}")
-    secciones['public'].append("")
-
-    # 5. MÉTODOS PROPIOS
-    if metodos:
-        secciones['public'].append("    // --- Métodos Propios ---")
-        for met in metodos:
-            tipo = getattr(met, 'tipo', 'void')
-            nom_raw = getattr(met, 'nombre', 'metodo')
-            
-            # Normalización
-            nombre_limpio = nom_raw.split('(')[0].strip() if '(' in nom_raw else nom_raw
-            firma = nom_raw if '(' in nom_raw else f"{nom_raw}()"
-
-            metodo_str = [f"    virtual {tipo} {firma} {{"] # 'virtual' para permitir herencia
-            if nombre_limpio in codigo_viejo:
-                metodo_str.append(f"        {codigo_viejo[nombre_limpio]}")
-            elif tipo != 'void':
-                val = "0" if tipo in ['int','float','double'] else '""'
-                metodo_str.append(f"        return {val};")
-            metodo_str.append("    }")
-            secciones['public'].append("\n".join(metodo_str))
-
-    # 6. MÉTODOS HEREDADOS (Override)
+    # 5. MÉTODOS HEREDADOS (override)
     if nombre_padre and metodos_padre:
         secciones['public'].append(f"    // --- Sobreescritura de {nombre_padre} ---")
         for met in metodos_padre:
-            if getattr(met, 'nivel', 'public') in ['public', 'protected']:
-                tipo = getattr(met, 'tipo', 'void')
-                nom_raw = getattr(met, 'nombre', 'metodo')
-                nombre_limpio = nom_raw.split('(')[0].strip() if '(' in nom_raw else nom_raw
-                firma = nom_raw if '(' in nom_raw else f"{nom_raw}()"
-
-                over_str = [f"    {tipo} {firma} override {{"]
-                over_str.append(f"        // Lógica de sobreescritura")
-                if tipo == 'void':
-                    over_str.append(f"        {nombre_padre}::{nombre_limpio}();")
-                else:
-                    over_str.append(f"        return {nombre_padre}::{nombre_limpio}();")
-                over_str.append("    }")
-                secciones['public'].append("\n".join(over_str))
+            if (getattr(met, 'nivel', 'public') or 'public') not in ('public', 'protected'):
+                continue
+            tipo = _tipo_cpp(getattr(met, 'tipo', 'void'))
+            firma, nombre_limpio = _firma_metodo(getattr(met, 'nombre', 'metodo'), _tipo_cpp)
+            llamada = f"{nombre_padre}::{nombre_limpio}()"
+            secciones['public'].append("\n".join([
+                f"    {tipo} {firma} override {{",
+                f"        {llamada};" if tipo == 'void' else f"        return {llamada};",
+                "    }"]))
 
     # ENSAMBLADO FINAL
-    for vis in ['private', 'protected', 'public']:
-        if secciones[vis]:
+    for vis in ('private', 'protected', 'public'):
+        if secciones.get(vis):
             codigo.append(f"{vis}:")
             codigo.extend(secciones[vis])
             codigo.append("")
-
-    codigo.append("};") # C++ requiere punto y coma al final
+    codigo.append("};")  # C++ requiere punto y coma al final
     return "\n".join(codigo)
+
 
 # core/utils.py
 
